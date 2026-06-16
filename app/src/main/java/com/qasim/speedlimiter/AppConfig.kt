@@ -1,8 +1,8 @@
 package com.qasim.speedlimiter
 
-importobject AppConfig {
-    const val DEFAULT_SPEED_LIMIT_KBPS = 512L
-    const val PREFS_NAME = "speed_limiter_prefs"
+object AppConfig {
+    const val DEFAULT_SPEED_LIMIT = 80
+    const val PREFS_NAME = "SpeedLimiterPrefs"
     const val KEY_SPEED_LIMIT = "speed_limit"
-    const val KEY_BLOCKED_APPS = "blocked_apps"
+    const val KEY_IS_ENABLED = "is_enabled"
 }
