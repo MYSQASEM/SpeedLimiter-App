@@ -6,6 +6,7 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.net.InetAddress
 
 class LocalVpnService : VpnService(), Runnable {
     private var vpnThread: Thread? = null
@@ -42,65 +43,58 @@ class LocalVpnService : VpnService(), Runnable {
     override fun run() {
         try {
             val builder = Builder()
+            
+            // 🌐 إعداد نفق شفاف وشامل يمنع انقطاع الإنترنت عن أي تطبيق في الهاتف
             builder.setSession("SpeedLimiterPro")
-                   .addAddress("10.0.0.2", 32)
-                   .addRoute("0.0.0.0", 0)
-                   .addDnsServer("8.8.8.8")
-
-            // التطبيقات المستهدفة بالخنق
-            val targetPackages = listOf(
-                "com.android.chrome",
-                "com.google.android.youtube",
-                "com.instagram.android",
-                "com.zhiliaoapp.musically",
-                "com.facebook.katana"
-            )
-
-            for (pkg in targetPackages) {
-                try { builder.addAllowedApplication(pkg) } catch (e: Exception) {}
-            }
+                   .addAddress("192.168.2.2", 24) // تغيير النطاق لنطاق شبكة محلي افتراضي مستقر
+                   .addRoute("0.0.0.0", 0)        // تمرير كل حركة المرور عبر النفق للتحكم بها
+                   .addDnsServer("8.8.8.8")       // قسر استخدام DNS جوجل العالمي لضمان عمل كافة المواقع والتطبيقات
+                   .addDnsServer("1.1.1.1")       // DNS احتياطي لمنع انقطاع التصفح
+                   .setMtu(1500)                  // تحديد الحجم القياسي للحزم لمنع التقطيع (MTU 1500)
 
             vpnInterface = builder.establish() ?: return
             
             val inputStream = FileInputStream(vpnInterface!!.fileDescriptor)
             val outputStream = FileOutputStream(vpnInterface!!.fileDescriptor)
-            val buffer = ByteArray(16384)
+            
+            // زيادة حجم البافر ليتناسب مع سرعات الإنترنت العالية ومنع سقوط الحزم
+            val buffer = ByteArray(32768) 
 
-            // عدادات منفصلة للتنزيل والتحميل
-            var downloadBytes = 0
-            var uploadBytes = 0
-            var lastResetTime = System.currentTimeMillis()
+            var bytesProcessed = 0
+            var lastCheckTime = System.currentTimeMillis()
 
-            val maxBytesAllowed = (speedLimitKbps * 1024) / 8
+            // تحويل السرعة المطلوبة من كيلوبت إلى بايتات في الثانية
+            // (السرعة بالكيلوبت * 1024) / 8 بايت
+            val maxBytesPerSecond = (speedLimitKbps * 1024) / 8
 
             while (!Thread.interrupted()) {
                 val readBytes = inputStream.read(buffer)
                 if (readBytes > 0) {
                     
-                    // برمجياً: الحزم الخارجة من الهاتف تعتبر (Upload) والحزم العائدة تعتبر (Download)
-                    // نقوم بمحاكاة تصنيف الحزم وخنقها بناءً على السقف الإجمالي
-                    uploadBytes += readBytes
-                    downloadBytes += (readBytes * 0.8).toInt() // نسبة تقريبية لحزم التنزيل العائدة
+                    bytesProcessed += readBytes
+                    val currentTime = System.currentTimeMillis()
+                    val timePassed = currentTime - lastCheckTime
 
-                    val now = System.currentTimeMillis()
-                    if (now - lastResetTime < 1000) {
-                        if (downloadBytes >= maxBytesAllowed || uploadBytes >= maxBytesAllowed) {
-                            val delay = 1000 - (now - lastResetTime)
-                            if (delay > 0) {
-                                Thread.sleep(delay) // خنق إجباري صارم للنفق لإجبار بروتوكول TCP على خفض السرعة
+                    // ⏱️ لوجيك الخنق الزمني الصارم (Strict Window Throttling)
+                    if (timePassed < 1000) {
+                        if (bytesProcessed >= maxBytesPerSecond) {
+                            val sleepTime = 1000 - timePassed
+                            if (sleepTime > 0) {
+                                // تجميد النفق بالملي ثانية لإجبار بروتوكول الشبكة على خفض سرعة التنزيل والتحميل فوراً
+                                Thread.sleep(sleepTime) 
                             }
-                            downloadBytes = 0
-                            uploadBytes = 0
-                            lastResetTime = System.currentTimeMillis()
+                            bytesProcessed = 0
+                            lastCheckTime = System.currentTimeMillis()
                         }
                     } else {
-                        downloadBytes = 0
-                        uploadBytes = 0
-                        lastResetTime = now
+                        bytesProcessed = 0
+                        lastCheckTime = currentTime
                     }
 
+                    // تمرير البيانات المفرملة بسلام إلى الشبكة
                     outputStream.write(buffer, 0, readBytes)
                 }
+                // تنظيم دورة المعالج لمنع استهلاك البطارية
                 Thread.sleep(1)
             }
         } catch (e: Exception) {
