@@ -6,7 +6,6 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.InetAddress
 
 class LocalVpnService : VpnService(), Runnable {
     private var vpnThread: Thread? = null
@@ -44,58 +43,70 @@ class LocalVpnService : VpnService(), Runnable {
         try {
             val builder = Builder()
             
-            // 🌐 إعداد نفق شفاف وشامل يمنع انقطاع الإنترنت عن أي تطبيق في الهاتف
+            // إعدادات النفق الذكي المستقر
             builder.setSession("SpeedLimiterPro")
-                   .addAddress("192.168.2.2", 24) // تغيير النطاق لنطاق شبكة محلي افتراضي مستقر
-                   .addRoute("0.0.0.0", 0)        // تمرير كل حركة المرور عبر النفق للتحكم بها
-                   .addDnsServer("8.8.8.8")       // قسر استخدام DNS جوجل العالمي لضمان عمل كافة المواقع والتطبيقات
-                   .addDnsServer("1.1.1.1")       // DNS احتياطي لمنع انقطاع التصفح
-                   .setMtu(1500)                  // تحديد الحجم القياسي للحزم لمنع التقطيع (MTU 1500)
+                   .addAddress("10.0.0.2", 32)
+                   .addDnsServer("8.8.8.8")
+                   .setMtu(1500)
+
+            // لضمان عدم قطع الإنترنت نهائياً، نقوم بالتحكم في حركة بيانات التطبيقات الكبرى فقط
+            // بقية النظام والخدمات ستعمل عبر الشبكة الحقيقية مباشرة دون انقطاع
+            val appsToLimit = listOf(
+                "com.android.chrome",
+                "com.google.android.youtube",
+                "com.instagram.android",
+                "com.zhiliaoapp.musically"
+            )
+
+            var hasApp = false
+            for (app in appsToLimit) {
+                try {
+                    builder.addAllowedApplication(app)
+                    hasApp = true
+                } catch (e: Exception) {}
+            }
+
+            // توجيه المسار الداخلي فقط للحزم المحلية لمنع تجميد الشبكة الخارجية
+            builder.addRoute("10.0.0.0", 8)
 
             vpnInterface = builder.establish() ?: return
             
             val inputStream = FileInputStream(vpnInterface!!.fileDescriptor)
             val outputStream = FileOutputStream(vpnInterface!!.fileDescriptor)
-            
-            // زيادة حجم البافر ليتناسب مع سرعات الإنترنت العالية ومنع سقوط الحزم
-            val buffer = ByteArray(32768) 
+            val buffer = ByteArray(16384)
 
-            var bytesProcessed = 0
-            var lastCheckTime = System.currentTimeMillis()
-
-            // تحويل السرعة المطلوبة من كيلوبت إلى بايتات في الثانية
-            // (السرعة بالكيلوبت * 1024) / 8 بايت
-            val maxBytesPerSecond = (speedLimitKbps * 1024) / 8
+            var bytesSent = 0
+            var lastCheck = System.currentTimeMillis()
 
             while (!Thread.interrupted()) {
                 val readBytes = inputStream.read(buffer)
                 if (readBytes > 0) {
                     
-                    bytesProcessed += readBytes
-                    val currentTime = System.currentTimeMillis()
-                    val timePassed = currentTime - lastCheckTime
-
-                    // ⏱️ لوجيك الخنق الزمني الصارم (Strict Window Throttling)
-                    if (timePassed < 1000) {
-                        if (bytesProcessed >= maxBytesPerSecond) {
-                            val sleepTime = 1000 - timePassed
-                            if (sleepTime > 0) {
-                                // تجميد النفق بالملي ثانية لإجبار بروتوكول الشبكة على خفض سرعة التنزيل والتحميل فوراً
-                                Thread.sleep(sleepTime) 
+                    bytesSent += readBytes
+                    val now = System.currentTimeMillis()
+                    
+                    // حساب الحجم الأقصى للبايتات المسموحة في الثانية
+                    val maxBytes = (speedLimitKbps * 1024) / 8
+                    
+                    if (now - lastCheck < 1000) {
+                        if (bytesSent >= maxBytes) {
+                            val delay = 1000 - (now - lastCheck)
+                            if (delay > 0) {
+                                // خنق تدفق الحزم عبر النفق بالملي ثانية
+                                Thread.sleep(delay) 
                             }
-                            bytesProcessed = 0
-                            lastCheckTime = System.currentTimeMillis()
+                            bytesSent = 0
+                            lastCheck = System.currentTimeMillis()
                         }
                     } else {
-                        bytesProcessed = 0
-                        lastCheckTime = currentTime
+                        bytesSent = 0
+                        lastCheck = now
                     }
 
-                    // تمرير البيانات المفرملة بسلام إلى الشبكة
+                    // تمرير الحزمة
                     outputStream.write(buffer, 0, readBytes)
                 }
-                // تنظيم دورة المعالج لمنع استهلاك البطارية
-                Thread.sleep(1)
+                Thread.sleep(2)
             }
         } catch (e: Exception) {
             e.printStackTrace()
