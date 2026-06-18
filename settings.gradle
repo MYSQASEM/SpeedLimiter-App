@@ -11,6 +11,9 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { url 'https://maven.google.com' }
+        
+        // 🚀 السطر السحري الذي يربط المشروع بمستودع جيت هاب لتحميل مكتبة الـ VPN بنجاح
+        maven { url 'https://jitpack.io' }
     }
 }
 rootProject.name = "SpeedLimiter"
