@@ -110,7 +110,7 @@ class LocalVpnService : VpnService(), Runnable {
                 }
             }
 
-            // 🚀 تم إصلاح جلب الحجم هنا وتحويله إلى Long بشكل مباشر وصحيح بكوتلن
+            // 🚀 ضمان تحويل حجم الحزمة إلى Long بشكل صريح ومباشر
             val packetSize = packet.remaining().toLong()
             speedThrottler?.limit(packetSize)
             
@@ -119,10 +119,11 @@ class LocalVpnService : VpnService(), Runnable {
                 try { channel.write(packet) } catch (e: Exception) {}
             }
         } else {
-            // تمرير الحزم الأخرى مباشرة دون تعديل لمنع انقطاع الخدمات الخلفية لنظام الهاتف
-            val dataCopy = ByteArray(packet.remaining())
+            // تمرير الحزم الأخرى مع التأكد من تحويل الأحجام لتفادي أي خطأ بنيوي
+            val dataSize = packet.remaining()
+            val dataCopy = ByteArray(dataSize)
             packet.get(dataCopy)
-            writeToVpn(dataCopy, dataCopy.size)
+            writeToVpn(dataCopy, dataSize)
         }
     }
 
@@ -145,4 +146,61 @@ class LocalVpnService : VpnService(), Runnable {
                         }
                     } else if (key.isReadable) {
                         val receiveBuffer = ByteBuffer.allocate(32768)
-                        val read
+                        val readBytes = channel.read(receiveBuffer)
+                        if (readBytes > 0) {
+                            receiveBuffer.flip()
+                            
+                            // 🚀 فرملة الـ Download بشكل صريح بتحويل القيمة إلى Long
+                            speedThrottler?.limit(readBytes.toLong())
+                            
+                            val responseData = ByteArray(readBytes)
+                            receiveBuffer.get(responseData)
+                            writeToVpn(responseData, readBytes)
+                        } else if (readBytes == -1) {
+                            channel.close()
+                            sessionMap.remove(sessionKey)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("VpnService", "Error in Selector Loop", e)
+        }
+    }
+
+    private fun writeToVpn(data: ByteArray, length: Int) {
+        outputQueue.submit {
+            try {
+                vpnInterface?.fileDescriptor?.let { fd ->
+                    val outputStream = FileOutputStream(fd)
+                    outputStream.write(data, 0, length)
+                    outputStream.flush()
+                }
+            } catch (e: Exception) {
+                // تخطي حزم الخرج العابرة
+            }
+        }
+    }
+
+    private fun stopVpn() {
+        isRunning = false
+        vpnThread?.interrupt()
+        selectorThread?.interrupt()
+        try { selector?.close() } catch (e: Exception) {}
+        try { vpnInterface?.close() } catch (e: Exception) {}
+        
+        for (channel in sessionMap.values) {
+            try { channel.close() } catch (e: Exception) {}
+        }
+        sessionMap.clear()
+        vpnInterface = null
+        selector = null
+        stopSelf()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopVpn()
+        outputQueue.shutdownNow()
+    }
+}
