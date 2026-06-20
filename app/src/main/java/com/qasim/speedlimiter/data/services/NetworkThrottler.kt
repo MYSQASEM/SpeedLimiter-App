@@ -11,7 +11,7 @@ class NetworkThrottler(private var maxBucketSize: Long, private var tokensPerSec
             if (availableTokens >= bytes) {
                 break
             }
-            // حساب زمن الانتظار الدقيق بالملي ثانية بناءً على كود u1.java المجرّب
+            // حساب زمن الانتظار الدقيق بالملي ثانية بناءً على معادلة u1.java الناجحة
             var sleepTime = ((bytes - availableTokens) * 1000) / tokensPerSecond
             if (sleepTime < 1) {
                 sleepTime = 1
