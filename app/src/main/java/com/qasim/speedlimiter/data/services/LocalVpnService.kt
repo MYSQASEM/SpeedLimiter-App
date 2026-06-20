@@ -4,18 +4,28 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
-import java.nio.channels.DatagramChannel
+import java.nio.channels.SelectionKey
+import java.nio.channels.Selector
 import java.nio.channels.SocketChannel
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 class LocalVpnService : VpnService(), Runnable {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var vpnThread: Thread? = null
+    private var selectorThread: Thread? = null
     private var isRunning = false
+    
     private var speedThrottler: NetworkThrottler? = null
+    private var selector: Selector? = null
+    private val outputQueue = Executors.newSingleThreadExecutor()
+    private val sessionMap = ConcurrentHashMap<String, SocketChannel>()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
@@ -23,7 +33,7 @@ class LocalVpnService : VpnService(), Runnable {
             val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
             val speedLimitKbps = sharedPrefs.getInt("speed_limit", 1024)
             
-            // تحويل الكيلوبت في الثانية إلى بايتات في الثانية
+            // تحويل السرعة إلى بايتات في الثانية
             val bytesPerSecond = (speedLimitKbps * 1024L) / 8L
             
             if (speedThrottler == null) {
@@ -34,8 +44,13 @@ class LocalVpnService : VpnService(), Runnable {
             
             if (!isRunning) {
                 isRunning = true
-                vpnThread = Thread(this, "AdvancedThrottledVpn")
+                selector = Selector.open()
+                
+                vpnThread = Thread(this, "VpnPacketReader")
                 vpnThread?.start()
+                
+                selectorThread = Thread({ runSelector() }, "VpnSelectorThread")
+                selectorThread?.start()
             }
         } else if (action == "STOP") {
             stopVpn()
@@ -43,62 +58,13 @@ class LocalVpnService : VpnService(), Runnable {
         return START_STICKY
     }
 
+    // 1️⃣ المسار الأول: قراءة الحزم الخام من نفق الـ VPN وتوجيهها
     override fun run() {
+        var inputStream: FileInputStream? = null
         try {
-            // بناء النفق بنطاق آي بي مخصص ومتوافق لمنع تداخل الحزم الداخلي
             val builder = Builder()
-            builder.setSession("SpeedLimiterEngine")
+            builder.setSession("SpeedLimiterPro")
                    .addAddress("10.0.0.2", 32)
                    .addRoute("0.0.0.0", 0)
                    .addDnsServer("8.8.8.8")
-                   .setMtu(1500)
-
-            // تفعيل ميزة التمرير المباشر لحزم النظام لضمان عدم انقطاع التطبيقات كلياً
-            setUnderlyingNetworks(null)
-
-            vpnInterface = builder.establish() ?: return
-
-            val fd = vpnInterface!!.fileDescriptor
-            val inputStream = FileInputStream(fd)
-            val outputStream = FileOutputStream(fd)
-            
-            // حجم بافر كبير مستوحى من كود التطبيق الناجح لتفادي اختناق الذاكرة العشوائية
-            val buffer = ByteArray(32768) 
-
-            while (isRunning && !Thread.interrupted()) {
-                val readBytes = inputStream.read(buffer)
-                if (readBytes > 0) {
-                    
-                    // 🚀 استدعاء محرك الفرملة الصارم المأخوذ من ملف u1.java الخاص بك
-                    speedThrottler?.limit(readBytes.toLong())
-                    
-                    // تمرير الحزم المفرملة عبر خط الشبكة الخارجي المباشر دون احتجازها في الهاتف
-                    try {
-                        outputStream.write(buffer, 0, readBytes)
-                        outputStream.flush()
-                    } catch (e: Exception) {
-                        // تخطي حزم الشبكة العابرة المفقودة
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            stopVpn()
-        }
-    }
-
-    private fun stopVpn() {
-        isRunning = false
-        vpnThread?.interrupt()
-        vpnThread = null
-        try { vpnInterface?.close() } catch (e: Exception) {}
-        vpnInterface = null
-        stopSelf()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        stopVpn()
-    }
-}
+                   .setMtu(150
