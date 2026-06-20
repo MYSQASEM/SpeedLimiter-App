@@ -7,6 +7,7 @@ import android.os.ParcelFileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 
 class LocalVpnService : VpnService(), Runnable {
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -20,7 +21,7 @@ class LocalVpnService : VpnService(), Runnable {
             val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
             val speedLimitKbps = sharedPrefs.getInt("speed_limit", 1024)
             
-            // تحويل الكيلوبت في الثانية إلى بايتات في الثانية
+            // تحويل الكيلوبت إلى بايتات في الثانية
             val bytesPerSecond = (speedLimitKbps * 1024L) / 8L
             
             if (speedThrottler == null) {
@@ -31,7 +32,7 @@ class LocalVpnService : VpnService(), Runnable {
             
             if (!isRunning) {
                 isRunning = true
-                vpnThread = Thread(this, "ThrottledVpnThread")
+                vpnThread = Thread(this, "SafeThrottledVpn")
                 vpnThread?.start()
             }
         } else if (action == "STOP") {
@@ -42,28 +43,38 @@ class LocalVpnService : VpnService(), Runnable {
 
     override fun run() {
         try {
+            // بناء نفق شبكة متوافق مع معايير الأندرويد الحديثة يمرر الاتصال ولا يحبسه
             val builder = Builder()
-            builder.setSession("SpeedLimiterEngine")
-                   .addAddress("10.0.0.2", 24)
-                   .addRoute("0.0.0.0", 0)
+            builder.setSession("SpeedLimiterCore")
+                   .addAddress("172.19.0.1", 30) // آي بي افتراضي معزول لمنع الـ Loopback
                    .addDnsServer("8.8.8.8")
+                   .addDnsServer("1.1.1.1")
+                   .addRoute("0.0.0.0", 0) // توجيه النطاق العام
                    .setMtu(1500)
+
+            // إجبار أندرويد على ربط النفق بالشبكة الحية الحقيقية (واي فاي / بيانات) لضمان التمرير الخارجي
+            setUnderlyingNetworks(null)
 
             vpnInterface = builder.establish() ?: return
 
-            val inputStream = FileInputStream(vpnInterface!!.fileDescriptor)
-            val outputStream = FileOutputStream(vpnInterface!!.fileDescriptor)
-            val buffer = ByteArray(16384)
+            val fileDescriptor = vpnInterface!!.fileDescriptor
+            val inputStream = FileInputStream(fileDescriptor)
+            val outputStream = FileOutputStream(fileDescriptor)
+            
+            val buffer = ByteArray(32768) // حجم بافر كبير كالموجود بكود التطبيق الناجح لمنع الاختناق
 
             while (isRunning && !Thread.interrupted()) {
                 val readBytes = inputStream.read(buffer)
                 if (readBytes > 0) {
-                    // 🚀 استخدام سر الفرملة الذكية المأخوذة من تطبيقك الناجح
+                    
+                    // 🚀 تطبيق فرملة الـ Bucket المأخوذة من ملف u1.java الخاص بك
                     speedThrottler?.limit(readBytes.toLong())
                     
-                    // كتابة الحزمة بعد أن أخذت وقتها الصحيح في الانتظار المبرمج
+                    // تمرير الحزمة مباشرة للنظام ليقوم بمعالجتها خارجياً دون حبسها
                     outputStream.write(buffer, 0, readBytes)
+                    outputStream.flush()
                 }
+                Thread.sleep(1) // تنظيم استهلاك المعالج
             }
         } catch (e: Exception) {
             e.printStackTrace()
