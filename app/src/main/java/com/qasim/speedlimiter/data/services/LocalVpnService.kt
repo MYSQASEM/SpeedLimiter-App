@@ -4,36 +4,29 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
-import com.qasim.speedlimiter.utils.TokenBucket
 import com.qasim.speedlimiter.utils.VpnSessionManager
 
 class LocalVpnService : VpnService(), Runnable {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var vpnThread: Thread? = null
     private var isRunning = false
-    private var speedLimitKbps: Int = 1024 // القيمة الافتراضية
+    private var speedLimitKbps: Int = 1024
     
-    private var tokenBucket: TokenBucket? = null
-    private var sessionManager: VpnSessionManager? = null
+    private val sessionManager = VpnSessionManager()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == "START") {
             val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
-            
-            // استقبال القيمة، وإذا كانت أقل من 100 نثبتها عند 100kbps بناءً على طلبك
             val inputLimit = sharedPrefs.getInt("speed_limit", 1024)
+            
+            // تأكيد تلبية طلبك: أقل سرعة مسموحة هي 100kbps
             speedLimitKbps = if (inputLimit < 100) 100 else inputLimit
             
-            // الحساب الرياضي الدقيق: تحويل الكيلوبت (Kbps) إلى بايتات فعيلة في الثانية
-            // 100 Kbps = (100 * 1000) / 8 = 12,500 Bytes/sec
-            val bytesPerSecond = (speedLimitKbps * 1000L) / 8
-            val refillRatePerMs = maxOf(1L, bytesPerSecond / 1000L)
-            
-            // تهيئة السلة بالقيم الدقيقة الجديدة
-            tokenBucket = TokenBucket(bytesPerSecond, refillRatePerMs)
-            
-            if (!isRunning) {
+            // إذا كان يعمل بالفعل، نقوم بتحديث السرعة ديناميكياً فور تحريك السلايدر دون إعادة تشغيل الـ VPN
+            if (isRunning) {
+                sessionManager.setRateLimit(speedLimitKbps)
+            } else {
                 isRunning = true
                 vpnThread = Thread(this, "SpeedVpnThread")
                 vpnThread?.start()
@@ -52,12 +45,12 @@ class LocalVpnService : VpnService(), Runnable {
                    .addRoute("0.0.0.0", 0) 
                    .addDnsServer("8.8.8.8")
 
-            // السماح للتطبيقات الأساسية بالمرور من خلال النفق للمعالجة
+            // حزم التطبيقات الأساسية التي ستخضع للتقييد
             val targetApps = listOf(
                 "com.android.chrome", 
                 "com.google.android.youtube", 
                 "com.facebook.katana",
-                "org.zwanoo.android.speedtest" // إضافة حزمة تطبيق سبييد تست للاختبار المباشر
+                "org.zwanoo.android.speedtest"
             )
             for (app in targetApps) {
                 try { builder.addAllowedApplication(app) } catch (e: Exception) {}
@@ -65,12 +58,8 @@ class LocalVpnService : VpnService(), Runnable {
 
             vpnInterface = builder.establish() ?: return
 
-            sessionManager = VpnSessionManager(
-                this, 
-                vpnInterface!!.fileDescriptor, 
-                tokenBucket
-            )
-            sessionManager?.startSession()
+            // تشغيل محرك التقييد الاحترافي وتمرير النفق له
+            sessionManager.startSession(vpnInterface!!, speedLimitKbps)
 
             while (isRunning) {
                 Thread.sleep(1000)
@@ -85,7 +74,7 @@ class LocalVpnService : VpnService(), Runnable {
 
     private fun stopVpn() {
         isRunning = false
-        sessionManager?.stopSession()
+        sessionManager.stopSession()
         vpnThread?.interrupt()
         vpnThread = null
         try { vpnInterface?.close() } catch (e: Exception) {}
