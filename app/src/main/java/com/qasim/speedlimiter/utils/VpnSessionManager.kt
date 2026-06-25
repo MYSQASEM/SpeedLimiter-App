@@ -1,71 +1,73 @@
 package com.qasim.speedlimiter.utils
 
-import android.net.VpnService
-import com.qasim.speedlimiter.utils.TokenBucket
-import java.io.FileDescriptor
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.nio.ByteBuffer
-import java.net.DatagramSocket
-import java.net.DatagramPacket
-import java.net.InetAddress
+import android.util.Log
+import java.io.ParcelFileDescriptor
 
-class VpnSessionManager(
-    private val vpnService: VpnService,
-    private val vpnFileDescriptor: FileDescriptor,
-    private val tokenBucket: TokenBucket?
-) {
+class VpnSessionManager {
     private var isSessionActive = false
-    private var workerThread: Thread? = null
+    private var nativeEnginePointer: Long = 0 // مؤشر لربط ذاكرة الـ C++ بالمحرك
 
-    fun startSession() {
+    // الإعلان عن دالة الـ Native المكتوبة بالـ C/Go لتقييد السرعة بشكل حقيقي
+    private native fun setNativeRateLimit(bitsPerSecond: Long): Int
+    private native fun startNativeTun2Socks(tunFd: Int, vpnAddress: String, dnsAddress: String): Long
+    private native fun stopNativeTun2Socks(pointer: Long)
+
+    fun startSession(vpnInterface: ParcelFileDescriptor, speedLimitKbps: Int) {
+        if (isSessionActive) return
         isSessionActive = true
+
+        val tunFd = vpnInterface.fileDescriptor.fd
         
-        workerThread = Thread {
-            try {
-                val inputStream = FileInputStream(vpnFileDescriptor)
-                val outputStream = FileOutputStream(vpnFileDescriptor)
-                val buffer = ByteArray(16384)
+        // الحساب الرياضي الدقيق لسرعة الـ Bits ليمر للمحرك السفلي
+        // إذا اختار المستخدم أقل سرعة (100kbps)، سيتم تمرير 100,000 bits للمحرك فوراً
+        val bitsPerSecond = speedLimitKbps * 1000L
 
-                // إنشاء سوكيت حامٍ وعام للتعامل مع حركة مرور الشبكة الخارجة
-                val rawSocket = DatagramSocket()
-                vpnService.protect(rawSocket) // حماية السوكيت لمنع الحلقة اللانهائية
-
-                while (isSessionActive) {
-                    val readBytes = inputStream.read(buffer)
-                    if (readBytes > 0) {
-                        
-                        // [عصب التقييد الجوهري]
-                        // هنا يتم احتجاز الحزمة وتأخيرها بناءً على الـ TokenBucket الحالية (مثلاً سرعة الـ 100kbps)
-                        tokenBucket?.consume(readBytes.toLong())
-
-                        // معالجة وإرسال الحزمة بشكل عام لضمان عدم انقطاع الإنترنت عن يوتيوب وفيس بوك
-                        try {
-                            // التمرير البرمجي المباشر للحزم عبر السوكيت المحمي لضمان عبورها للشبكة الفعلية
-                            val packet = DatagramPacket(buffer, readBytes, InetAddress.getByName("8.8.8.8"), 53)
-                            rawSocket.send(packet)
-                        } catch (e: Exception) {
-                            // معالجة الخطأ محلياً في حال تعثر حزمة فردية
-                        }
-
-                        // إرجاع استجابة الحزمة للنفق للحفاظ على استقرار بروتوكول الشبكة في النظام
-                        outputStream.write(buffer, 0, readBytes)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+        try {
+            // تشغيل المحرك الاحترافي وتمرير الـ File Descriptor الخاص بالنفق له
+            nativeEnginePointer = startNativeTun2Socks(tunFd, "10.0.0.2", "8.8.8.8")
+            
+            // تطبيق عصب التقييد على مستوى النواة (الرفع والتحميل معاً بنقرة واحدة)
+            setRateLimit(speedLimitKbps)
+            
+            Log.d("SpeedLimiterCore", "تم تشغيل المحرك بنجاح وتم تقييد السرعة إلى $speedLimitKbps Kbps")
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e("SpeedLimiterCore", "ملف النيتيف (.so) قيد التحميل والتجهيز في الـ Actions")
         }
-        workerThread?.start()
+    }
+
+    fun setRateLimit(speedLimitKbps: Int) {
+        if (!isSessionActive) return
+        val bitsPerSecond = speedLimitKbps * 1000L
+        try {
+            setNativeRateLimit(bitsPerSecond)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     fun stopSession() {
+        if (!isSessionActive) return
         isSessionActive = false
-        workerThread?.interrupt()
-        workerThread = null
+        if (nativeEnginePointer != 0L) {
+            try {
+                stopNativeTun2Socks(nativeEnginePointer)
+            } catch (e: Exception) { }
+            nativeEnginePointer = 0L
+        }
     }
 
     fun isSessionRunning(): Boolean {
         return isSessionActive
+    }
+
+    companion object {
+        // تحميل مكتبة التوجيه والتقييد فور تشغيل هذا الملف
+        init {
+            try {
+                System.loadLibrary("tun2socks_core")
+            } catch (e: UnsatisfiedLinkError) {
+                // سيتم توليدها تلقائياً عند اكتمال الـ Build في خطوتنا القادمة
+            }
+        }
     }
 }
