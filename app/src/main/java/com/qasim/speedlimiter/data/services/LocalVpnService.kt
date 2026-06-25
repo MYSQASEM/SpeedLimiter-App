@@ -11,7 +11,7 @@ class LocalVpnService : VpnService(), Runnable {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var vpnThread: Thread? = null
     private var isRunning = false
-    private var speedLimitKbps: Int = 1024
+    private var speedLimitKbps: Int = 1024 // القيمة الافتراضية
     
     private var tokenBucket: TokenBucket? = null
     private var sessionManager: VpnSessionManager? = null
@@ -20,13 +20,18 @@ class LocalVpnService : VpnService(), Runnable {
         val action = intent?.action
         if (action == "START") {
             val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
-            speedLimitKbps = sharedPrefs.getInt("speed_limit", 1024)
             
-            // حساب السرعة بالبايت في الثانية وتحضير السلة
-            val bytesPerSecond = (speedLimitKbps * 1024L) / 8
-            val refillRatePerMs = bytesPerSecond / 1000
+            // استقبال القيمة، وإذا كانت أقل من 100 نثبتها عند 100kbps بناءً على طلبك
+            val inputLimit = sharedPrefs.getInt("speed_limit", 1024)
+            speedLimitKbps = if (inputLimit < 100) 100 else inputLimit
             
-            tokenBucket = TokenBucket(bytesPerSecond, maxOf(1, refillRatePerMs))
+            // الحساب الرياضي الدقيق: تحويل الكيلوبت (Kbps) إلى بايتات فعيلة في الثانية
+            // 100 Kbps = (100 * 1000) / 8 = 12,500 Bytes/sec
+            val bytesPerSecond = (speedLimitKbps * 1000L) / 8
+            val refillRatePerMs = maxOf(1L, bytesPerSecond / 1000L)
+            
+            // تهيئة السلة بالقيم الدقيقة الجديدة
+            tokenBucket = TokenBucket(bytesPerSecond, refillRatePerMs)
             
             if (!isRunning) {
                 isRunning = true
@@ -41,22 +46,25 @@ class LocalVpnService : VpnService(), Runnable {
 
     override fun run() {
         try {
-            // إعداد نفق الـ VPN
             val builder = Builder()
             builder.setSession("SpeedLimiterCorePro")
                    .addAddress("10.0.0.2", 32)
                    .addRoute("0.0.0.0", 0) 
                    .addDnsServer("8.8.8.8")
 
-            // تحديد التطبيقات
-            val targetApps = listOf("com.android.chrome", "com.google.android.youtube")
+            // السماح للتطبيقات الأساسية بالمرور من خلال النفق للمعالجة
+            val targetApps = listOf(
+                "com.android.chrome", 
+                "com.google.android.youtube", 
+                "com.facebook.katana",
+                "org.zwanoo.android.speedtest" // إضافة حزمة تطبيق سبييد تست للاختبار المباشر
+            )
             for (app in targetApps) {
                 try { builder.addAllowedApplication(app) } catch (e: Exception) {}
             }
 
             vpnInterface = builder.establish() ?: return
 
-            // تشغيل الـ SessionManager الفعلي الذي يوجه ويقيد السرعة
             sessionManager = VpnSessionManager(
                 this, 
                 vpnInterface!!.fileDescriptor, 
@@ -64,7 +72,6 @@ class LocalVpnService : VpnService(), Runnable {
             )
             sessionManager?.startSession()
 
-            // إبقاء الخدمة تعمل طالما الـ VPN مفعل
             while (isRunning) {
                 Thread.sleep(1000)
             }
