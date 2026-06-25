@@ -1,1 +1,1 @@
-Speed Limiter-App
+SpeedLimiterCore-Pro
