@@ -6,6 +6,8 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.qasim.speedlimiter.utils.VpnSessionManager
+import java.net.DatagramSocket
+import java.net.Socket
 
 class LocalVpnService : VpnService(), Runnable {
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -21,12 +23,10 @@ class LocalVpnService : VpnService(), Runnable {
             val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
             val inputLimit = sharedPrefs.getInt("speed_limit", 1024)
             
-            // ضبط الحدود البرمجية الصارمة: من 100 Kbps كحد أدنى إلى 30000 Kbps (أي 30 Mbps) كحد أقصى
             speedLimitKbps = inputLimit.coerceIn(100, 30000)
             
             if (isRunning) {
                 sessionManager.setRateLimit(speedLimitKbps)
-                updateVpnTunnel()
             } else {
                 isRunning = true
                 vpnThread = Thread(this, "SpeedVpnThread")
@@ -38,30 +38,17 @@ class LocalVpnService : VpnService(), Runnable {
         return START_STICKY
     }
 
-    private fun updateVpnTunnel() {
-        Thread {
-            try {
-                buildTunnel()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }.start()
-    }
-
     private fun buildTunnel() {
         try { vpnInterface?.close() } catch (e: Exception) {}
 
         val builder = Builder()
         builder.setSession("SpeedLimiterCorePro")
                .addAddress("10.0.0.2", 32)
+               .addRoute("0.0.0.0", 0) // إجبار النظام على تمرير حركة البيانات بالكامل داخل نفق التحديد
+               .addDnsServer("8.8.8.8")
+               .setMtu(1500)
 
-        // 📊 معادلة ضبط الـ MTU الحسابية الموزونة لضمان التوازن بين الرفع والتنزيل:
-        // قمنا برفع الحد الأدنى الحرج إلى 576 لمنع اختناق حزم الرفع (Upload) وضمان منطقية القراءات
-        val calculatedMtu = (576 + (speedLimitKbps / 30)).coerceIn(576, 1500)
-        builder.setMtu(calculatedMtu)
-
-        Log.d("SpeedLimiterCore", "تطبيق التخنيق المتزن.. السرعة المحددة: $speedLimitKbps Kbps، الـ MTU الناتجة: $calculatedMtu")
-
+        // تحديد التطبيقات المستهدفة بالتخنيق
         val targetApps = listOf(
             "com.android.chrome", 
             "com.google.android.youtube", 
@@ -75,7 +62,8 @@ class LocalVpnService : VpnService(), Runnable {
         vpnInterface = builder.establish()
         
         if (vpnInterface != null) {
-            sessionManager.startSession(vpnInterface!!.fileDescriptor, speedLimitKbps)
+            // تشغيل مدير الجلسة لربط تدفق البيانات الحقيقي بخوارزمية التخنيق
+            sessionManager.startSession(vpnInterface!!.fileDescriptor, speedLimitKbps, this)
         }
     }
 
@@ -87,6 +75,8 @@ class LocalVpnService : VpnService(), Runnable {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
         } finally {
             stopVpn()
         }
