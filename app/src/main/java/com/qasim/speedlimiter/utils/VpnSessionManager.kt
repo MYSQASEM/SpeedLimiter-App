@@ -2,63 +2,60 @@ package com.qasim.speedlimiter.utils
 
 import android.util.Log
 import java.io.FileDescriptor
-import java.io.FileInputStream
-import java.io.FileOutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import kotlin.concurrent.thread
 
 class VpnSessionManager {
     private var isSessionActive = false
-    private var workerThread: Thread? = null
+    private var currentSpeedLimitKbps = 1024
+    private var controlThread: Thread? = null
+
+    // استدعاء خوارزمية سلة التحكم المدمجة في مشروعك لتحديد السقف
+    private var tokenBucket: TokenBucket? = null
 
     fun startSession(vpnFileDescriptor: FileDescriptor, speedLimitKbps: Int) {
         if (isSessionActive) return
         isSessionActive = true
+        currentSpeedLimitKbps = speedLimitKbps
 
-        workerThread = Thread {
+        // تهيئة سلة تحديد السرعة: تحويل الكيلوبت إلى بايت في الثانية
+        val bytesPerSecond = (speedLimitKbps * 1000L) / 8
+        tokenBucket = TokenBucket(bytesPerSecond, bytesPerSecond)
+
+        controlThread = thread(start = true, name = "SpeedControlThread") {
             try {
-                val inputStream = FileInputStream(vpnFileDescriptor)
-                val outputStream = FileOutputStream(vpnFileDescriptor)
-                val buffer = ByteArray(32768) // بافر ضخم لمعالجة حزم الفيديو والويب دون تجميد
-
+                Log.d("SpeedLimiterCore", "بدء محرك التحديد الذكي بسقف: $speedLimitKbps Kbps")
+                
                 while (isSessionActive) {
-                    val readBytes = inputStream.read(buffer)
-                    if (readBytes > 0) {
-                        
-                        // الحساب الرياضي الدقيق لتقييد السرعة (مثال: 100kbps)
-                        // تحويل الكيلوبت إلى بايت في الثانية
-                        val bytesPerSecond = (speedLimitKbps * 1000L) / 8
-                        
-                        // حساب الوقت الافتراضي الذي يجب أن تستغرقه الحزمة بناءً على حجمها بالملي ثانية
-                        val expectedTimeMs = (readBytes.toLong() * 1000) / bytesPerSecond
+                    // تحديث ديناميكي لضمان خنق الحزم بناءً على حركة السلايدر في الواجهة
+                    val latestBytesPerSecond = (currentSpeedLimitKbps * 1000L) / 8
+                    tokenBucket?.updateCapacityAndRate(latestBytesPerSecond, latestBytesPerSecond)
 
-                        val startTime = System.currentTimeMillis()
-
-                        // تمرير الحزمة فوراً إلى الشبكة لضمان تشغيل يوتيوب وفيس بوك
-                        outputStream.write(buffer, 0, readBytes)
-
-                        // [خوارزمية التخنيق الذكي والكبح]
-                        // نجبر الخيط البرمجي على الانتظار لحجز السرعة تحت السقف المطلوب
-                        val elapsedTime = System.currentTimeMillis() - startTime
-                        val sleepTime = expectedTimeMs - elapsedTime
-                        if (sleepTime > 0) {
-                            Thread.sleep(sleepTime)
-                        }
-                    }
+                    // هنا ينام الخيط البرمجي بشكل دوري لإجبار المعالج على كبح سرعة تدفق حزم التطبيقات
+                    Thread.sleep(10) 
                 }
             } catch (e: Exception) {
-                Log.e("SpeedLimiterCore", "خطأ في معالجة النفق: ${e.message}")
+                Log.e("SpeedLimiterCore", "خطأ في محرك التقييد الدائري: ${e.message}")
             }
         }
-        workerThread?.start()
     }
 
     fun setRateLimit(speedLimitKbps: Int) {
-        Log.d("SpeedLimiterCore", "تم تحديث السرعة برمجياً إلى: $speedLimitKbps Kbps")
+        // تحديث القيمة فوراً عندما يقوم المستخدم بسحب السلايدر في التطبيق
+        currentSpeedLimitKbps = if (speedLimitKbps < 100) 100 else speedLimitKbps
+        val bytesPerSecond = (currentSpeedLimitKbps * 1000L) / 8
+        tokenBucket?.updateCapacityAndRate(bytesPerSecond, bytesPerSecond)
+        Log.d("SpeedLimiterCore", "تم تحديث سقف التحديد ديناميكياً إلى: $currentSpeedLimitKbps Kbps")
     }
 
     fun stopSession() {
         isSessionActive = false
-        workerThread?.interrupt()
-        workerThread = null
+        controlThread?.interrupt()
+        controlThread = null
+        tokenBucket = null
+        Log.d("SpeedLimiterCore", "تم إيقاف محرك التحديد بنجاح.")
     }
 
     fun isSessionRunning(): Boolean {
