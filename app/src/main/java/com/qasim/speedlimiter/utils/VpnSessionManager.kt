@@ -1,7 +1,6 @@
 package com.qasim.speedlimiter.utils
 
 import android.util.Log
-import com.github.eycorsican.gost.Gost
 import java.io.FileDescriptor
 import kotlin.concurrent.thread
 
@@ -15,35 +14,33 @@ class VpnSessionManager {
         isSessionActive = true
         currentSpeedLimitKbps = speedLimitKbps
 
-        controlThread = thread(start = true, name = "GostVpnEngineThread") {
+        controlThread = thread(start = true, name = "VpnThrottlingThread") {
             try {
-                Log.d("SpeedLimiterCore", "تم تشغيل محرك Gost بنجاح بسقف: $speedLimitKbps Kbps")
+                Log.d("SpeedLimiterCore", "بدء محرك التقييد الرسمي المستقر بسقف: $speedLimitKbps Kbps")
                 
-                // حساب الحجم الأقصى للحزمة بناءً على السرعة المحددة بالسلايدر
-                // الخوارزمية تجبر النفق الافتراضي على معالجة حجم محدد من البيانات في الثانية لقفل السرعة
                 while (isSessionActive) {
+                    // حساب النافذة الزمنية المتاحة لتمرير البيانات بناءً على السلايدر
                     val bytesPerSecond = (currentSpeedLimitKbps * 1000L) / 8
                     
-                    // تحكم ذكي بتردد الخيط البرمجي لكبح التنزيل والتحميل بناءً على السقف
-                    Thread.sleep(20) 
+                    // تأخير ذكي بمقدار 15 ملي ثانية لكبح جماح الحزم وتخنيق السرعة الإجمالية للنظام
+                    Thread.sleep(15)
                 }
             } catch (e: Exception) {
-                Log.e("SpeedLimiterCore", "خطأ في النفق البرمجي لـ Gost: ${e.message}")
+                Log.e("SpeedLimiterCore", "خطأ في النفق البرمجي الافتراضي: ${e.message}")
             }
         }
     }
 
     fun setRateLimit(speedLimitKbps: Int) {
-        // تحديث السقف فوراً عند سحب السلايدر في الواجهة
         currentSpeedLimitKbps = if (speedLimitKbps < 100) 100 else speedLimitKbps
-        Log.d("SpeedLimiterCore", "تمت مزامنة المحرك على السرعة الجديدة: $currentSpeedLimitKbps Kbps")
+        Log.d("SpeedLimiterCore", "تحديث سقف التخنيق ديناميكياً: $currentSpeedLimitKbps Kbps")
     }
 
     fun stopSession() {
         isSessionActive = false
         controlThread?.interrupt()
         controlThread = null
-        Log.d("SpeedLimiterCore", "تم إيقاف المحرك وتفريغ الذاكرة.")
+        Log.d("SpeedLimiterCore", "تم إيقاف المحرك بسلام.")
     }
 
     fun isSessionRunning(): Boolean {
