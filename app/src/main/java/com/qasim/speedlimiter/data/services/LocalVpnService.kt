@@ -21,11 +21,11 @@ class LocalVpnService : VpnService(), Runnable {
             val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
             val inputLimit = sharedPrefs.getInt("speed_limit", 1024)
             
-            speedLimitKbps = if (inputLimit < 100) 100 else inputLimit
+            // ضبط الحدود البرمجية الصارمة: من 100 Kbps كحد أدنى إلى 30000 Kbps (أي 30 Mbps) كحد أقصى
+            speedLimitKbps = inputLimit.coerceIn(100, 30000)
             
             if (isRunning) {
                 sessionManager.setRateLimit(speedLimitKbps)
-                // إعادة تشغيل النفق لتطبيق الـ MTU الجديد فوراً عند تحريك السلايدر
                 updateVpnTunnel()
             } else {
                 isRunning = true
@@ -49,19 +49,18 @@ class LocalVpnService : VpnService(), Runnable {
     }
 
     private fun buildTunnel() {
-        // إغلاق النفق القديم قبل بناء الجديد لتفادي تجميد الاتصال
         try { vpnInterface?.close() } catch (e: Exception) {}
 
         val builder = Builder()
         builder.setSession("SpeedLimiterCorePro")
-               .addAddress("10.0.0.2", 32) // تحديد الآيبي بشكل مخصص لتجنب تعليق الإنترنت
+               .addAddress("10.0.0.2", 32)
 
-        // 🧠 خوارزمية الخنق الذكي عبر الـ MTU:
-        // الحساب الرياضي يقوم بتصغير الحزم عند خفض السرعة لإجبار النظام على إبطاء نقل البيانات
-        val calculatedMtu = (100 + (speedLimitKbps / 4)).coerceIn(128, 1500)
+        // 📊 معادلة ضبط الـ MTU الحسابية الموزونة لضمان التوازن بين الرفع والتنزيل:
+        // قمنا برفع الحد الأدنى الحرج إلى 576 لمنع اختناق حزم الرفع (Upload) وضمان منطقية القراءات
+        val calculatedMtu = (576 + (speedLimitKbps / 30)).coerceIn(576, 1500)
         builder.setMtu(calculatedMtu)
 
-        Log.d("SpeedLimiterCore", "جاري تطبيق التحديد الحديدي بالنظام.. السرعة: $speedLimitKbps, الـ MTU: $calculatedMtu")
+        Log.d("SpeedLimiterCore", "تطبيق التخنيق المتزن.. السرعة المحددة: $speedLimitKbps Kbps، الـ MTU الناتجة: $calculatedMtu")
 
         val targetApps = listOf(
             "com.android.chrome", 
