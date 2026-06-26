@@ -62,7 +62,8 @@ dependencies {
     // =======================================================
     // أمر استدعاء ملفات المكتبات المحلية والمحرك التنفيذي (AAR)
     // =======================================================
-    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+    // implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+
 
     // مكتبات أندرويد الأساسية والكوتلن
     implementation 'androidx.core:core-ktx:1.12.0'
