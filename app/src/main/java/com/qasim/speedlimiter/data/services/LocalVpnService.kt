@@ -12,8 +12,8 @@ class LocalVpnService : VpnService(), Runnable {
     private var isRunning = false
     private var speedLimitKbps: Int = 1024
     
-    // تهيئة مدير الجلسة وتمرير الـ Context له
-    private val sessionManager by lazy { VpnSessionManager(applicationContext) }
+    // تهيئة مدير الجلسة الجديد المستقل (بدون تمرير Context)
+    private val sessionManager = VpnSessionManager()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
@@ -41,7 +41,7 @@ class LocalVpnService : VpnService(), Runnable {
         try {
             val builder = Builder()
             builder.setSession("SpeedLimiterCorePro")
-                   .addAddress("10.0.0.2", 24) // تغيير الـ Prefix إلى 24 ليتطابق مع الـ Netmask (255.255.255.0)
+                   .addAddress("10.0.0.2", 24) 
                    .addRoute("0.0.0.0", 0) 
                    .addDnsServer("8.8.8.8")
                    .setMtu(1500)
@@ -59,8 +59,10 @@ class LocalVpnService : VpnService(), Runnable {
 
             vpnInterface = builder.establish() ?: return
 
-            // تشغيل محرك نفق النيتيف الحقيقي المتواجد بمشروعك
-            sessionManager.startSession(vpnInterface!!, speedLimitKbps)
+            // =======================================================
+            // [التعديل المقصود] تمرير الـ fileDescriptor مباشرة للكود الجديد
+            // =======================================================
+            sessionManager.startSession(vpnInterface!!.fileDescriptor, speedLimitKbps)
 
             while (isRunning) {
                 Thread.sleep(1000)
