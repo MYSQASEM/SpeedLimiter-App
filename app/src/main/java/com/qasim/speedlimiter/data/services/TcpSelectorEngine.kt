@@ -1,6 +1,8 @@
 package com.qasim.speedlimiter.data.services
 
 import android.util.Log
+import com.qasim.speedlimiter.utils.VpnConnectionSession
+import com.qasim.speedlimiter.utils.TokenBucket
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.SelectionKey
@@ -10,7 +12,7 @@ import java.util.concurrent.BlockingQueue
 
 /**
  * محرك معالجة البيانات واستقبالها من الإنترنت الحقيقي (مستوحى ومطور من h.java في كود المطور)
- * يعمل في خيط منفصل تمامًا لإدارة الاتصال وخنق التحميل (Download) بدقة
+ * متواجد في حزمة الخدمات (services) ويعمل في خيط منفصل لإدارة الاتصالات وتأخير حزم التحميل (Download)
  */
 class TcpSelectorEngine(
     private val selector: Selector,
@@ -72,7 +74,7 @@ class TcpSelectorEngine(
     }
 
     /**
-     * السحر الحقيقي هنا: قراءة بايتات التحميل وتطبيق الخنق بالملي ثانية عبر الـ TokenBucket
+     * قراءة بايتات التحميل وتطبيق الخنق بالملي ثانية عبر الـ TokenBucket الخاص بالخدمة
      */
     private fun handleRead(key: SelectionKey, iterator: MutableIterator<SelectionKey>) {
         val session = key.attachment() as? VpnConnectionSession ?: return
@@ -87,8 +89,8 @@ class TcpSelectorEngine(
             if (readBytes > 0) {
                 iterator.remove()
                 
-                // [التخنيق الرياضي الدقيق] المستوحى من كود المطور لضبط سرعة الـ Download
-                session.downloadBucket?.consume(readBytes.toLong())
+                // [التخنيق الرياضي الدقيق] يتم استدعاء الـ downloadBucket العام المتواجد في نفس الحزمة
+                LocalVpnService.downloadBucket.consume(readBytes.toLong())
                 
                 // هنا يتم إعداد البيانات المقروءة وتحويلها إلى حزمة IP/TCP مصطنعة لإرسالها للهاتف
                 buffer.flip()
@@ -110,7 +112,7 @@ class TcpSelectorEngine(
             }
         } catch (e: Exception) {
             iterator.remove()
-            Log.e("TcpSelectorEngine", "حدث خطأ أثناء قراءة البيانات خنقها: ${e.message}")
+            Log.e("TcpSelectorEngine", "حدث خطأ أثناء قراءة البيانات وخنقها: ${e.message}")
             VpnConnectionSession.closeSession(session)
         }
     }
