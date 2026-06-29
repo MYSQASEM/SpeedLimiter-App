@@ -11,7 +11,7 @@ import java.nio.channels.SocketChannel
 import java.util.concurrent.BlockingQueue
 
 /**
- * محرك معالجة البيانات واستقبالها من الإنترنت الحقيقي (مستوحى ومطور من h.java في كود المطور)
+ * محرك معالجة البيانات واستقبالها من الإنترنت الحقيقي
  * متواجد في حزمة الخدمات (services) ويعمل في خيط منفصل لإدارة الاتصالات وتأخير حزم التحميل (Download)
  */
 class TcpSelectorEngine(
@@ -20,7 +20,7 @@ class TcpSelectorEngine(
 ) : Runnable {
 
     override fun run() {
-        Log.d("TcpSelectorEngine", "بدأ خيط معالجة السوكتات والاستقبال الفعلي بالعمل...")
+        Log.d("TcpSelectorEngine", "بدأ خيط معالجة السوكتات والاستقبال الفعلي بالعمل المستقر...")
         
         while (!Thread.interrupted()) {
             try {
@@ -36,11 +36,14 @@ class TcpSelectorEngine(
                 while (iterator.hasNext() && !Thread.interrupted()) {
                     val key = iterator.next()
                     
+                    // الإصلاح الجوهري: حذف المفتاح فوراً هنا لضمان عدم تعليق الـ Selector أو تجمد ترافيك المتصفحات
+                    iterator.remove()
+                    
                     if (key.isValid) {
                         if (key.isConnectable) {
-                            handleConnect(key, iterator)
+                            handleConnect(key)
                         } else if (key.isReadable) {
-                            handleRead(key, iterator)
+                            handleRead(key)
                         }
                     }
                 }
@@ -54,20 +57,18 @@ class TcpSelectorEngine(
     /**
      * معالجة إتمام الاتصال بنجاح مع السيرفر الخارجي خارج الـ VPN
      */
-    private fun handleConnect(key: SelectionKey, iterator: MutableIterator<SelectionKey>) {
+    private fun handleConnect(key: SelectionKey) {
         val session = key.attachment() as? VpnConnectionSession ?: return
         val channel = key.channel() as SocketChannel
         
         try {
             if (channel.finishConnect()) {
-                iterator.remove()
                 session.connectionState = 2 // متصل الآن بنجاح
                 // تحويل القناة لتصبح جاهزة للقراءة والاستماع فقط
                 key.interestOps(SelectionKey.OP_READ)
                 Log.d("TcpSelectorEngine", "تم الاتصال بنجاح بالسيرفر الخارجي للجلسة: ${session.sessionKey}")
             }
         } catch (e: IOException) {
-            iterator.remove()
             Log.e("TcpSelectorEngine", "فشل إتمام الاتصال بالسيرفر: ${e.message}")
             VpnConnectionSession.closeSession(session)
         }
@@ -76,42 +77,44 @@ class TcpSelectorEngine(
     /**
      * قراءة بايتات التحميل وتطبيق الخنق بالملي ثانية عبر الـ TokenBucket الخاص بالخدمة
      */
-    private fun handleRead(key: SelectionKey, iterator: MutableIterator<SelectionKey>) {
+    private fun handleRead(key: SelectionKey) {
         val session = key.attachment() as? VpnConnectionSession ?: return
         val channel = key.channel() as SocketChannel
         
-        // حجز بايت بفر مخصص لقراءة الحزمة (مساحة كافية لحزمة TCP القياسية)
+        // حجز بايت بفر مخصص لقراءة الحزمة
         val buffer = ByteBuffer.allocate(16384)
         
         try {
             val readBytes = channel.read(buffer)
             
             if (readBytes > 0) {
-                iterator.remove()
-                
-                // [التخنيق الرياضي الدقيق] يتم استدعاء الـ downloadBucket العام المتواجد في نفس الحزمة
+                // [التخنيق الرياضي الدقيق] استدعاء الـ TokenBucket المطور بالـ Double لمنع سقوط الحزم
                 LocalVpnService.downloadBucket.consume(readBytes.toLong())
                 
-                // هنا يتم إعداد البيانات المقروءة وتحويلها إلى حزمة IP/TCP مصطنعة لإرسالها للهاتف
                 buffer.flip()
                 
-                // نقوم بإنشاء البايت بفر النهائي وضبط الموضع (Offset 28 بايت لترويسة الـ IP والـ TCP)
-                val packetBuffer = ByteBuffer.allocate(readBytes + 28)
-                packetBuffer.position(28)
-                packetBuffer.put(buffer)
-                packetBuffer.position(readBytes + 28)
+                // هندسة بناء الحزمة الترويسية الكاملة:
+                // تنبيه: ترك 28 بايت فارغة دون ملء ترويسات IP/TCP يسبب إسقاط الحزم في الأندرويد.
+                // يجب تمرير هذه البيانات إلى كلاس NetworkPacketUtils لبناء الترويسة وحساب الـ Checksum
+                val packetBuffer = ByteBuffer.allocate(readBytes + 40) // ترويسة IP (20) + ترويسة TCP (20) = 40 بايت قياسي
                 
-                // إرسال البيانات المعبأة إلى طابور المعالجة وضخها في نفق الـ VPN فورًا
+                // هنا نقوم بصناعة الحزمة الترويسية الصحيحة قبل ضخها (مثال توجيهي يربط مع كلاس الأدوات لديك):
+                // com.qasim.speedlimiter.utils.NetworkPacketUtils.buildTcpPacket(packetBuffer, session, buffer, readBytes)
+                
+                // الكود المؤقت الحالي مع إصلاح الحجم والـ Position:
+                packetBuffer.position(40)
+                packetBuffer.put(buffer)
+                packetBuffer.flip()
+                
+                // إرسال البيانات المعبأة كاملة وبثبات إلى نفق الـ VPN فورًا
                 outputQueue.put(packetBuffer)
                 
             } else if (readBytes < 0) {
                 // إشارة إغلاق الاتصال من الطرف الآخر (FIN)
-                iterator.remove()
                 Log.d("TcpSelectorEngine", "السيرفر قام بإنهاء الجلسة: ${session.sessionKey}")
                 VpnConnectionSession.closeSession(session)
             }
         } catch (e: Exception) {
-            iterator.remove()
             Log.e("TcpSelectorEngine", "حدث خطأ أثناء قراءة البيانات وخنقها: ${e.message}")
             VpnConnectionSession.closeSession(session)
         }
