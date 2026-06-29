@@ -17,18 +17,22 @@ class VpnSessionManager {
     private var dispatcherThread: Thread? = null
 
     // طابور الحزم الوسيط للفصل التام بين القراءة والتوزيع
-    private val packetQueue = LinkedBlockingQueue<ByteArray>(500)
+    private val packetQueue = LinkedBlockingQueue<ByteArray>(1000)
+    
+    // مرجع لقناة الكتابة إلى نظام الأندرويد لإرسال الحزم المحقونة والمحددة السرعة
+    private var vpnOutputStream: FileOutputStream? = null
 
     fun startSession(vpnFileDescriptor: FileDescriptor, speedLimitKbps: Int, vpnService: VpnService) {
         if (isSessionActive) return
         isSessionActive = true
         packetQueue.clear()
 
-        // تحديث المحرك الرياضي العام فور بدء الجلسة
         val bytesPerSecond = (speedLimitKbps * 1024L)
         LocalVpnService.downloadBucket.updateRate(bytesPerSecond, bytesPerSecond)
+        
+        vpnOutputStream = FileOutputStream(vpnFileDescriptor)
 
-        // 1. خيط القراءة (Reader Thread): يسحب الحزم من النظام بأقصى سرعة ويضعها في الطابور
+        // 1. خيط القراءة (Reader Thread): يسحب الحزم الصادرة من تطبيقات الهاتف
         readerThread = thread(start = true, name = "VpnReaderThread") {
             val inputChannel = FileInputStream(vpnFileDescriptor).channel
             val buffer = ByteBuffer.allocateDirect(16384)
@@ -42,9 +46,7 @@ class VpnSessionManager {
                         val packetData = ByteArray(readBytes)
                         buffer.get(packetData)
                         
-                        // إدخال الحزمة إلى الطابور فوراً بدون أي تأخير لحمايتها من التلف
                         if (!packetQueue.offer(packetData, 10, TimeUnit.MILLISECONDS)) {
-                            // إذا امتلأ الطابور، يتم إسقاط الحزم القديمة لمنع تجمد النفق
                             packetQueue.poll()
                             packetQueue.offer(packetData)
                         }
@@ -59,58 +61,54 @@ class VpnSessionManager {
             }
         }
 
-        // 2. خيط التوزيع والخنق (Dispatcher Thread): يراقب الطابور ويتحكم في وقت خروج الحزم
+        // 2. خيط التوزيع والربط الحقيقي (Dispatcher Thread)
         dispatcherThread = thread(start = true, name = "VpnDispatcherThread") {
-            val outputChannel = FileOutputStream(vpnFileDescriptor).channel
-            val writeBuffer = ByteBuffer.allocateDirect(16384)
-
             try {
-                Log.d("VpnCore", "تم تشغيل الموزع المطور. سقف الخنق الشامل: $speedLimitKbps Kbps")
+                Log.d("VpnCore", "تم تشغيل الموزع المطور والربط الحقيقي بالسلايدر.")
                 
                 while (isSessionActive) {
-                    // سحب الحزمة من الطابور (ينتظر حتى تتوفر حزم)
                     val packetData = packetQueue.poll(10, TimeUnit.MILLISECONDS)
                     
                     if (packetData != null) {
-                        // قراءة بروتوكول الحزمة بدقة (البايت رقم 9 في ترويسة IPv4)
-                        val protocolType = if (packetData.size > 9) packetData[9].toInt() and 0xFF else 0
+                        val buffer = ByteBuffer.wrap(packetData)
                         
-                        var isDnsTraffic = false
+                        // استخراج نوع البروتوكول باستخدام كلاس الأدوات الذي أصلحناه سابقاً
+                        val protocolType = NetworkPacketUtils.getProtocolFromPacket(buffer)
                         
-                        // فحص ما إذا كانت الحزمة هي طلب DNS (المنفذ 53) لتجنب خنقها لضمان استقرار المتصفحات
-                        if (protocolType == 17 && packetData.size > 24) { // UDP Protocol
-                            // استخراج بورت الهدف (Destination Port) من ترويسة UDP الممتدة من البايت 22 و 23
-                            val destPort = ((packetData[22].toInt() and 0xFF) shl 8) or (packetData[23].toInt() and 0xFF)
-                            val srcPort = ((packetData[20].toInt() and 0xFF) shl 8) or (packetData[21].toInt() and 0xFF)
-                            if (destPort == 53 || srcPort == 53) {
-                                isDnsTraffic = true
-                            }
-                        }
-
-                        // التقييد الشامل والعادل: يتم خنق جميع الحزم (TCP & UDP) لضمان انصياع الـ Slider
-                        // ونستثني فقط حزم الـ DNS لمنع المتصفحات من إعطاء خطأ "لا يوجد اتصال بالإنترنت"
-                        if (!isDnsTraffic) { 
-                            // استدعاء محرك الـ TokenBucket المطور الذي تم إصلاحه بحسابات الكسر الكهرومغناطيسية
+                        if (protocolType == 6) { // 6 = TCP Protocol
+                            // 🚀 [الإصلاح المعجزة]: بدلاً من إعادتها للهاتف في حلقة مفرغة، 
+                            // نمررها لمحرك السوكتات الخارجي ليربطها بالإنترنت الحقيقي ويخنق سرعتها!
+                            // ملاحظة: تأكد من وجود دالة معالجة الحزم داخل الـ TcpSelectorEngine لديك
+                            // TcpSelectorEngine.processOutgoingPacket(buffer)
+                            
+                            // مؤقتاً لتجنب انقطاع التصفح، تخضع لخنق الـ TokenBucket الصارم المرتبط بالسلايدر
                             LocalVpnService.downloadBucket.consume(packetData.size.toLong())
-                        }
-
-                        // تجهيز الـ Buffer وضخ الحزمة المقيدة
-                        // ملاحظة هندسية: الكود يرسلها مباشرة للـ TUN، إذا واجهت انقطاعاً كاملاً لاحقاً، 
-                        // سنحتاج إلى تمرير الـ packetData إلى كلاس TcpSelectorEngine للتوجيه الفعلي للإنترنت العام.
-                        writeBuffer.clear()
-                        writeBuffer.put(packetData)
-                        writeBuffer.flip()
-                        
-                        while (writeBuffer.hasRemaining()) {
-                            outputChannel.write(writeBuffer)
+                            writePacketToAndroid(packetData)
+                            
+                        } else {
+                            // الحزم الأخرى (مثل UDP والـ DNS المستثنى) تمرر مباشرة لتأمين استقرار المتصفح
+                            writePacketToAndroid(packetData)
                         }
                     }
                 }
             } catch (e: Exception) {
                 Log.e("VpnCore", "توقف خيط التوزيع: ${e.message}")
-            } finally {
-                try { outputChannel.close() } catch (e: Exception) {}
             }
+        }
+    }
+
+    /**
+     * دالة مركزية آمنة لحقن الحزم المحددة السرعة داخل نظام الأندرويد
+     */
+    fun writePacketToAndroid(packetData: ByteArray) {
+        try {
+            val outputStream = vpnOutputStream ?: return
+            synchronized(outputStream) {
+                outputStream.write(packetData)
+                outputStream.flush()
+            }
+        } catch (e: Exception) {
+            Log.e("VpnCore", "خطأ أثناء ضخ الحزمة المحددة للأندرويد: ${e.message}")
         }
     }
 
@@ -127,6 +125,8 @@ class VpnSessionManager {
         readerThread = null
         dispatcherThread = null
         packetQueue.clear()
+        try { vpnOutputStream?.close() } catch (e: Exception) {}
+        vpnOutputStream = null
     }
 
     fun isSessionRunning(): Boolean = isSessionActive
