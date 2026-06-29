@@ -17,26 +17,27 @@ class LocalVpnService : VpnService(), Runnable {
     private val sessionManager = VpnSessionManager()
 
     companion object {
-        // محرك السرعة الذكي والمتاح على مستوى الخدمة لربطه مع الـ Session Manager
+        // محرك السرعة الذكي والمتاح على مستوى الخدمة لربطه مع الـ Session Manager وباقي المحركات
         // القيمة الافتراضية الابتدائية (تُحسب بالبايت: كيلوبايت * 1024)
         val downloadBucket = TokenBucket(1024 * 1024L, 1024 * 1024L)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
+        
+        // التقاط التحديثات القادمة من الـ Slider حيةً سواء كانت الخدمة تبدأ أو تعمل بالفعل
+        val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
+        val inputLimit = intent?.getIntExtra("speed_limit", sharedPrefs.getInt("speed_limit", 1024)) ?: 1024
+        
+        speedLimitKbps = inputLimit.coerceIn(100, 30000)
+        val limitInBytes = speedLimitKbps * 1024L
+        
+        // تحديث فوري للمحرك الرياضي لتطبيق السرعة الجديدة وإيقاظ خيوط التوقف الفوري
+        downloadBucket.updateRate(limitInBytes, limitInBytes)
+        sessionManager.setRateLimit(speedLimitKbps)
+
         if (action == "START") {
-            val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
-            val inputLimit = sharedPrefs.getInt("speed_limit", 1024)
-            
-            speedLimitKbps = inputLimit.coerceIn(100, 30000)
-            
-            // تحديث فوري للمحرك الرياضي لتطبيق السرعة الجديدة وإيقاظ خيوط التوقف الفوري
-            val limitInBytes = speedLimitKbps * 1024L
-            downloadBucket.updateRate(limitInBytes, limitInBytes)
-            
-            if (isRunning) {
-                sessionManager.setRateLimit(speedLimitKbps)
-            } else {
+            if (!isRunning) {
                 isRunning = true
                 vpnThread = Thread(this, "SpeedVpnThread")
                 vpnThread?.start()
@@ -54,7 +55,9 @@ class LocalVpnService : VpnService(), Runnable {
         builder.setSession("SpeedLimiterCorePro")
                .addAddress("10.0.0.2", 24) 
                .addRoute("0.0.0.0", 0)     
+               // إضافة أكثر من سيرفر DNS لضمان استقرار المتصفحات وتجنب سقوط حزم الـ TCP
                .addDnsServer("8.8.8.8")
+               .addDnsServer("1.1.1.1")
                .setMtu(1500)
 
         val targetApps = listOf(
@@ -75,19 +78,23 @@ class LocalVpnService : VpnService(), Runnable {
             Log.d("LocalVpnService", "تم إنشاء واجهة الـ VPN وتمرير الجلسة للمحرك بنجاح.")
         } else {
             Log.e("LocalVpnService", "فشل في إنشاء واجهة الـ VPN")
+            stopVpn()
         }
     }
 
     override fun run() {
         try {
             buildTunnel()
+            // حلقة الانتظار للمحافظة على خيط الـ VPN مستيقظاً طالما الخدمة تعمل
             while (isRunning) {
-                Thread.sleep(1000)
+                try {
+                    Thread.sleep(1000)
+                } catch (e: InterruptedException) {
+                    break
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
         } finally {
             stopVpn()
         }
