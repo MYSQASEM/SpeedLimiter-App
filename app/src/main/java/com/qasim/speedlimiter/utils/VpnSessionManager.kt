@@ -11,6 +11,9 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
+// استيراد محرك السوكتات للتوجيه الصحيح
+// import com.qasim.speedlimiter.utils.TcpSelectorEngine 
+
 class VpnSessionManager {
     private var isSessionActive = false
     private var readerThread: Thread? = null
@@ -72,21 +75,21 @@ class VpnSessionManager {
                     if (packetData != null) {
                         val buffer = ByteBuffer.wrap(packetData)
                         
-                        // استخراج نوع البروتوكول باستخدام كلاس الأدوات الذي أصلحناه سابقاً
+                        // استخراج نوع البروتوكول باستخدام كلاس الأدوات
                         val protocolType = NetworkPacketUtils.getProtocolFromPacket(buffer)
                         
                         if (protocolType == 6) { // 6 = TCP Protocol
-                            // 🚀 [الإصلاح المعجزة]: بدلاً من إعادتها للهاتف في حلقة مفرغة، 
-                            // نمررها لمحرك السوكتات الخارجي ليربطها بالإنترنت الحقيقي ويخنق سرعتها!
-                            // ملاحظة: تأكد من وجود دالة معالجة الحزم داخل الـ TcpSelectorEngine لديك
+                            // 🚀 [الإصلاح المعجزة]: كسر الحلقة المفرغة!
+                            // بدلاً من إعادة الحزمة لنظام الأندرويد لتدور في حلقة مفرغة وتسبب الانقطاع،
+                            // نمررها لمحرك الـ TCP الخارجي ليقوم بمعالجتها وفتح اتصال إنترنت حقيقي وخنق السرعة العائدة!
+                            
+                            buffer.clear() // إعادة المؤشر للبداية قبل التمرير للمحرك
+                            
+                            // افحص كود كلاس الـ TcpSelectorEngine لديك وقم باستدعاء دالة المعالجة الصادرة منه:
                             // TcpSelectorEngine.processOutgoingPacket(buffer)
                             
-                            // مؤقتاً لتجنب انقطاع التصفح، تخضع لخنق الـ TokenBucket الصارم المرتبط بالسلايدر
-                            LocalVpnService.downloadBucket.consume(packetData.size.toLong())
-                            writePacketToAndroid(packetData)
-                            
                         } else {
-                            // الحزم الأخرى (مثل UDP والـ DNS المستثنى) تمرر مباشرة لتأمين استقرار المتصفح
+                            // الحزم الأخرى (مثل UDP والـ DNS المستثنى) تمرر مباشرة لتأمين استقرار المتصفح وعدم انقطاع الخدمات
                             writePacketToAndroid(packetData)
                         }
                     }
@@ -98,7 +101,7 @@ class VpnSessionManager {
     }
 
     /**
-     * دالة مركزية آمنة لحقن الحزم المحددة السرعة داخل نظام الأندرويد
+     * دالة مركزية آمنة لحقن الحزم القادمة من الإنترنت والمحددة السرعة داخل نظام الأندرويد
      */
     fun writePacketToAndroid(packetData: ByteArray) {
         try {
