@@ -24,15 +24,11 @@ import com.qasim.speedlimiter.data.services.LocalVpnService
 class MainActivity : ComponentActivity() {
 
     private val VPN_REQUEST_CODE = 24
-    
-    // تعريف متغير على مستوى الكلاس لمراقبة وتحديث الحالة مباشرة من الـ Callback
-    private var isVpnEnabledState = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
-        isVpnEnabledState.value = sharedPrefs.getBoolean("is_enabled", false)
 
         setContent {
             val backgroundColor = Color(0xFF111625) 
@@ -41,7 +37,7 @@ class MainActivity : ComponentActivity() {
             val successGreen = Color(0xFF10B981)    
             val lightBlue = Color(0xFF38BDF8)
 
-            var isVpnEnabled by remember { isVpnEnabledState }
+            var isVpnEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("is_enabled", false)) }
             
             // تهيئة السلايدر بالقيمة المحفوظة أو القيمة الافتراضية 1024
             var speedLimit by remember { mutableStateOf(sharedPrefs.getInt("speed_limit", 1024).toFloat()) }
@@ -124,16 +120,13 @@ class MainActivity : ComponentActivity() {
                                 speedLimit = newValue
                                 sharedPrefs.edit().putInt("speed_limit", newValue.toInt()).apply()
                                 
-                                // الإصلاح الجوهري: تمرير القيمة الحية "speed_limit" داخل الـ Intent لينصاع المحرك الرياضي فوراً أثناء السحب
+                                // مزامنة حية وإرسال التحديث للخدمة النشطة مباشرة أثناء السحب
                                 if (isVpnEnabled) {
-                                    val intent = Intent(this@MainActivity, LocalVpnService::class.java).apply { 
-                                        action = "START" 
-                                        putExtra("speed_limit", newValue.toInt())
-                                    }
+                                    val intent = Intent(this@MainActivity, LocalVpnService::class.java).apply { action = "START" }
                                     startService(intent)
                                 }
                             },
-                            valueRange = 100f..30000f, // من 100 Kbps إلى 30 Mbps
+                            valueRange = 100f..30000f, // النطاق الحسابي المحدث: من 100 Kbps إلى 30 Mbps
                             colors = SliderDefaults.colors(thumbColor = primaryPurple, activeTrackColor = primaryPurple, inactiveTrackColor = Color.Gray.copy(alpha = 0.3f))
                         )
 
@@ -182,15 +175,9 @@ class MainActivity : ComponentActivity() {
             val sharedPrefs = getSharedPreferences("SpeedLimiterPrefs", Context.MODE_PRIVATE)
             sharedPrefs.edit().putBoolean("is_enabled", true).apply()
             
-            // تحديث حالة الـ Compose State مباشرةً لتبديل الزر بسلاسة تامة ومنع وميض الشاشة القاسي
-            isVpnEnabledState.value = true
-            
-            val limitValue = sharedPrefs.getInt("speed_limit", 1024)
-            val intent = Intent(this, LocalVpnService::class.java).apply { 
-                action = "START" 
-                putExtra("speed_limit", limitValue)
-            }
+            val intent = Intent(this, LocalVpnService::class.java).apply { action = "START" }
             startService(intent)
+            recreate()
         }
     }
 }
