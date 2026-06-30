@@ -1,5 +1,6 @@
 package com.qasim.speedlimiter.data.services
 
+import android.net.VpnService
 import android.util.Log
 import com.qasim.speedlimiter.utils.VpnConnectionSession
 import com.qasim.speedlimiter.utils.NetworkPacketUtils
@@ -19,7 +20,8 @@ import java.util.concurrent.BlockingQueue
  */
 class TcpSelectorEngine(
     private val selector: Selector,
-    private val outputQueue: BlockingQueue<ByteBuffer> // الطابور الموجه لإعادة ضخ الحزم بالنفق
+    private val outputQueue: BlockingQueue<ByteBuffer>, // الطابور الموجه لإعادة ضخ الحزم بالنفق
+    private val vpnService: VpnService // 🚀 تمرير مرجع الخدمة لتفعيل الـ protect
 ) : Runnable {
 
     companion object {
@@ -40,7 +42,6 @@ class TcpSelectorEngine(
         
         while (!Thread.interrupted()) {
             try {
-                // الانتظار حتى تصبح إحدى القنوات جاهزة للاستقبال أو الاتصال
                 if (selector.select() == 0) {
                     Thread.sleep(10)
                     continue
@@ -69,14 +70,12 @@ class TcpSelectorEngine(
     }
 
     /**
-     * 🚀 [الدالة المعجزة المفقودة]: استقبال الحزم الصادرة من تطبيقات الهاتف وربطها بالإنترنت
+     * استقبال الحزم الصادرة من تطبيقات الهاتف وربطها بالإنترنت الخارجي بأمان
      */
     private fun handleOutgoingPacket(packet: ByteBuffer) {
         try {
-            // 1. استخراج عناوين الـ IP والبورتات الحقيقية من داخل الحزمة القادمة من نظام الأندرويد
             packet.position(0)
             
-            // قراءة الـ IPs (نحتاج تخطي أول 12 بايت في ترويسة IP للوصول للمصدر والهدف)
             val srcIpBuf = ByteArray(4)
             val destIpBuf = ByteArray(4)
             packet.position(12)
@@ -86,14 +85,12 @@ class TcpSelectorEngine(
             val sourceAddress = InetAddress.getByAddress(srcIpBuf)
             val destAddress = InetAddress.getByAddress(destIpBuf)
 
-            // الوصول لترويسة الـ TCP (تبدأ بعد 20 بايت من الـ IP ترويسة)
             packet.position(20)
             val sourcePort = packet.short.toInt() and 0xFFFF
             val destPort = packet.short.toInt() and 0xFFFF
             
             val sessionKey = "${sourceAddress.hostAddress}:$sourcePort -> ${destAddress.hostAddress}:$destPort"
 
-            // 2. التحقق من وجود جلسة سابقة أو إنشاء واحدة جديدة فوراً
             var session = VpnConnectionSession.getSession(sessionKey)
             if (session == null) {
                 session = VpnConnectionSession().apply {
@@ -104,34 +101,30 @@ class TcpSelectorEngine(
                     this.remotePort = destPort
                 }
                 
-                // 3. فتح قناة اتصال حقيقية (SocketChannel) خارج الـ VPN متجهة للسيرفر الحقيقي
                 val socketChannel = SocketChannel.open()
                 socketChannel.configureBlocking(false)
                 
-                // حماية السوكت لمنع دخوله في حلقة مفرغة مع الـ VPN (توجيهه للإنترنت الحقيقي عبر الواي فاي أو البيانات)
-                // ملحوظة: الـ LocalVpnService يجب أن يحتوي على دالة الـ protect القياسية
-                // (context as VpnService).protect(socketChannel.socket())
+                // 🚀 [الإصلاح التاريخي الأخير]: حماية السوكت لمنعه من الدخول في حلقة مفرغة وتوجيهه للإنترنت الحقيقي فوراً
+                vpnService.protect(socketChannel.socket())
 
                 socketChannel.connect(InetSocketAddress(destAddress, destPort))
                 
                 session.channel = socketChannel
-                // تسجيل السوكت داخل الـ Selector لمراقبة لحظة إتمام الاتصال
                 session.selectionKey = socketChannel.register(selector, SelectionKey.OP_CONNECT, session)
                 
                 VpnConnectionSession.addSession(sessionKey, session)
-                Log.d("TcpSelectorEngine", "🚀 تم إنشاء اتصال إنترنت حقيقي جديد لتطبيق الهاتف: $sessionKey")
+                Log.d("TcpSelectorEngine", "🚀 تم حماية السوكت وربطه بالإنترنت الخارجي بنجاح: $sessionKey")
             }
 
-            // 4. إذا كان هناك بيانات (Payload) داخل الحزمة الصادرة، نقوم بكتابتها فوراً للسيرفر الحقيقي
             val ipHeaderLength = 20
-            val tcpHeaderLength = 20 // تبسيطاً للسرعة
+            val tcpHeaderLength = 20
             val totalHeaderLength = ipHeaderLength + tcpHeaderLength
             
             packet.position(0)
             val totalLength = packet.short.toInt() and 0xFFFF
             val payloadLength = totalLength - totalHeaderLength
 
-            if (payloadLength > 0 && session.connectionState == 2) {
+            if (payloadLength > 0) {
                 packet.position(totalHeaderLength)
                 val payload = ByteBuffer.allocate(payloadLength)
                 val backupLimit = packet.limit()
@@ -140,8 +133,10 @@ class TcpSelectorEngine(
                 packet.limit(backupLimit)
                 payload.flip()
                 
-                while (payload.hasRemaining()) {
-                    session.channel?.write(payload)
+                if (session.connectionState == 2) {
+                    while (payload.hasRemaining()) {
+                        session.channel?.write(payload)
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -155,7 +150,7 @@ class TcpSelectorEngine(
         
         try {
             if (channel.finishConnect()) {
-                session.connectionState = 2 // متصل الآن بنجاح
+                session.connectionState = 2 
                 key.interestOps(SelectionKey.OP_READ)
                 Log.d("TcpSelectorEngine", "تم الاتصال بنجاح بالسيرفر الخارجي للجلسة: ${session.sessionKey}")
             }
@@ -180,10 +175,12 @@ class TcpSelectorEngine(
                 buffer.flip()
                 val packetBuffer = ByteBuffer.allocate(readBytes + 40)
                 
-                // بناء الترويسات الرياضية السليمة ليفهمها الأندرويد دون إسقاط الحزمة
                 NetworkPacketUtils.buildTcpPacket(packetBuffer, session, buffer, readBytes)
                 
                 session.sendNextSequenceNumber += readBytes
+                
+                // 🚀 إرسال البيانات المحقونة فوراً لطابور الإخراج ليتم قراءتها وضخها للهاتف
+                packetBuffer.flip()
                 outputQueue.put(packetBuffer)
                 
             } else if (readBytes < 0) {
