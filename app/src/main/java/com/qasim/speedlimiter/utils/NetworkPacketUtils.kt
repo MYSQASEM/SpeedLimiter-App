@@ -88,8 +88,8 @@ object NetworkPacketUtils {
         packetBuffer.clear()
         packetBuffer.limit(totalLength)
         
-        // تحديث الـ Sequence الخاص بالجلسة بمقدار البايتات المرسلة
-        session.sendNextSequenceNumber += dataLength
+        // 🚀 [الإصلاح المعجزة]: حذف الزيادة المكررة هنا لأنها تتم بالفعل وبشكل صحيح داخل خيط الـ TcpSelectorEngine
+        // session.sendNextSequenceNumber += dataLength (تم حذف السطر المسبب للمشكلة)
     }
 
     /**
