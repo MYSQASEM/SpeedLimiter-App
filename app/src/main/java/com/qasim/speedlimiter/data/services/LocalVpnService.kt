@@ -60,52 +60,41 @@ class LocalVpnService : VpnService(), Runnable {
     }
 
     private fun buildTunnel() {
-    try { vpnInterface?.close() } catch (e: Exception) {}
+        try { vpnInterface?.close() } catch (e: Exception) {}
 
-    val builder = Builder()
-    
-    builder.setSession(AppConfig.VPN_SESSION_NAME)
-           .addAddress(AppConfig.VPN_ADDRESS, 24) 
-           .addRoute("0.0.0.0", 0) // توجيه شامل ومستقر لكل الترافيك الصادر ليمر عبر السلايدر     
-           .setMtu(AppConfig.VPN_MTU)
+        val builder = Builder()
+        
+        // قراءة إعدادات الشبكة ديناميكياً من ملف AppConfig المطور
+        builder.setSession(AppConfig.VPN_SESSION_NAME)
+               .addAddress(AppConfig.VPN_ADDRESS, 24) 
+               .addRoute(AppConfig.VPN_ROUTE, 0)     
+               .setMtu(AppConfig.VPN_MTU)
 
-    // إضافة سيرفرات الـ DNS بشكل ديناميكي
-    AppConfig.DNS_SERVERS.forEach { dns ->
-        builder.addDnsServer(dns)
-    }
+        // إضافة سيرفرات الـ DNS بشكل ديناميكي مكرر من الـ AppConfig لضمان ثبات التصفح والـ TCP
+        AppConfig.DNS_SERVERS.forEach { dns ->
+            builder.addDnsServer(dns)
+        }
 
-    // إضافة التطبيقات المستهدفة بالخنق
-    AppConfig.TARGET_APPLICATIONS.forEach { appPackage ->
-        try { 
-            builder.addAllowedApplication(appPackage) 
-        } catch (e: Exception) {
-            Log.e("LocalVpnService", "التطبيق غير مثبت على هذا الهاتف: $appPackage")
+        // إضافة التطبيقات المستهدفة بالخنق ديناميكياً بلف حلقة تكرار حول القائمة في AppConfig
+        AppConfig.TARGET_APPLICATIONS.forEach { appPackage ->
+            try { 
+                builder.addAllowedApplication(appPackage) 
+            } catch (e: Exception) {
+                Log.e("LocalVpnService", "التطبيق غير مثبت على هذا الهاتف: $appPackage")
+            }
+        }
+
+        vpnInterface = builder.establish()
+        
+        if (vpnInterface != null) {
+            // تشغيل الجلسة وتمرير النفق إلى الموزع المطور
+            sessionManager.startSession(vpnInterface!!.fileDescriptor, speedLimitKbps, this)
+            Log.d("LocalVpnService", "تم إنشاء واجهة الـ VPN وتمرير الجلسة للمحرك بنجاح.")
+        } else {
+            Log.e("LocalVpnService", "فشل في إنشاء واجهة الـ VPN")
+            stopVpn()
         }
     }
-
-    vpnInterface = builder.establish()
-    
-    if (vpnInterface != null) {
-        // تشغيل الجلسة وتمرير النفق والمرجع الحركي للخدمة بنجاح
-        sessionManager.startSession(vpnInterface!!.fileDescriptor, speedLimitKbps, this)
-        Log.d("LocalVpnService", "تم إنشاء واجهة الـ VPN وتمرير الجلسة للمحرك بنجاح.")
-    } else {
-        Log.e("LocalVpnService", "فشل في إنشاء واجهة الـ VPN")
-        stopVpn()
-    }
-}
-
-    vpnInterface = builder.establish()
-    
-    if (vpnInterface != null) {
-        // تشغيل الجلسة وتمرير النفق إلى الموزع المطور
-        sessionManager.startSession(vpnInterface!!.fileDescriptor, speedLimitKbps, this)
-        Log.d("LocalVpnService", "تم إنشاء واجهة الـ VPN وتمرير الجلسة للمحرك بنجاح.")
-    } else {
-        Log.e("LocalVpnService", "فشل في إنشاء واجهة الـ VPN")
-        stopVpn()
-    }
-}
 
     override fun run() {
         try {
