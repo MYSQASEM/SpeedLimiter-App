@@ -30,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,7 +43,7 @@ data class AppUiInfo(
     val appName: String,
     val packageName: String,
     val icon: Drawable,
-    var isChecked: Boolean
+    val isInitiallyChecked: Boolean
 )
 
 class MainActivity : ComponentActivity() {
@@ -83,19 +84,23 @@ class MainActivity : ComponentActivity() {
             
             var installedApps by remember { mutableStateOf<List<AppUiInfo>>(emptyList()) }
             var searchQuery by remember { mutableStateOf("") }
+            
+            // إدارة الحزم المحددة ديناميكياً لضمان سلاسة الـ Switch واختفاء الاضطراب
             val selectedPackages = remember { mutableStateOf(AppConfig.getTargetApps(context)) }
 
+            // جلب التطبيقات في الخلفية
             LaunchedEffect(Unit) {
                 withContext(Dispatchers.IO) {
                     val pm = context.packageManager
                     val packages = pm.getInstalledPackages(PackageManager.GET_META_DATA)
                     val list = mutableListOf<AppUiInfo>()
+                    val currentSelection = AppConfig.getTargetApps(context)
                     for (packageInfo in packages) {
                         if (pm.getLaunchIntentForPackage(packageInfo.packageName) != null) {
                             val name = packageInfo.applicationInfo.loadLabel(pm).toString()
                             val icon = packageInfo.applicationInfo.loadIcon(pm)
                             val pName = packageInfo.packageName
-                            list.add(AppUiInfo(name, pName, icon, selectedPackages.value.contains(pName)))
+                            list.add(AppUiInfo(name, pName, icon, currentSelection.contains(pName)))
                         }
                     }
                     list.sortBy { it.appName }
@@ -140,7 +145,6 @@ class MainActivity : ComponentActivity() {
                         )
 
                         menuItems.forEach { (title, color) ->
-                            // ✅ تم التعديل هنا إلى Divider ليتوافق مع إصدار مشروعك
                             Divider(color = Color.LightGray.copy(alpha = 0.3f))
                             Row(
                                 modifier = Modifier
@@ -161,11 +165,12 @@ class MainActivity : ComponentActivity() {
             ) {
                 Surface(modifier = Modifier.fillMaxSize(), color = backgroundColor) {
                     Column(
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp),
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        // البار العلوي اليدوي لثبات التصميم
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -175,22 +180,40 @@ class MainActivity : ComponentActivity() {
                             Text("محدد السرعة", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                         }
 
+                        // 🔍 [حل مشكلة اختفاء النص وحجب لوحة المفاتيح]: حقل البحث أصبح في الأعلى وبلون نص أبيض صريح
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                            textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
+                            placeholder = { Text("ابحث عن تطبيق لتحديد سرعته...", color = Color.LightGray.copy(alpha = 0.6f)) },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.White) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = primaryPurple,
+                                unfocusedBorderColor = Color.Gray,
+                                focusedContainerColor = cardColor,
+                                unfocusedContainerColor = cardColor
+                            )
+                        )
+
+                        // العداد المركزي وحالة الخدمة
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(cardColor).padding(16.dp)
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(cardColor).padding(14.dp)
                         ) {
                             Box(
                                 contentAlignment = Alignment.Center,
-                                modifier = Modifier.size(120.dp).clip(CircleShape).background(if (isVpnEnabled) successGreen.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f))
+                                modifier = Modifier.size(110.dp).clip(CircleShape).background(if (isVpnEnabled) successGreen.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f))
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     val speedDisplay = if (speedLimit >= 1000) "${String.format("%.1f", speedLimit / 1000f)} Mbps" else "${speedLimit.toInt()} Kbps"
-                                    Text(text = speedDisplay, color = if (isVpnEnabled) successGreen else Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black)
+                                    Text(text = speedDisplay, color = if (isVpnEnabled) successGreen else Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black)
                                     Text(text = if (isVpnEnabled) "الحد الأقصى نشط" else "الخدمة متوقفة", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
 
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -198,7 +221,7 @@ class MainActivity : ComponentActivity() {
                                     val dlSpeed = if (speedLimit >= 1000) "${String.format("%.1f", (speedLimit * 0.85f) / 1000f)} Mbps" else "${(speedLimit * 0.85f).toInt()} Kbps"
                                     Text(text = if (isVpnEnabled) dlSpeed else "0.0 Kbps", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                                 }
-                                Box(modifier = Modifier.width(1.dp).height(30.dp).background(Color.Gray.copy(alpha = 0.3f)))
+                                Box(modifier = Modifier.width(1.dp).height(25.dp).background(Color.Gray.copy(alpha = 0.3f)))
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text(text = "📤 التحميل (UL)", color = primaryPurple, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     val ulSpeed = if (speedLimit >= 1000) "${String.format("%.1f", (speedLimit * 0.50f) / 1000f)} Mbps" else "${(speedLimit * 0.50f).toInt()} Kbps"
@@ -207,10 +230,11 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                        Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(cardColor).padding(16.dp)) {
-                            Text(text = "اسحب لتحديد سقف السرعة الإجمالية:", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        // السلايدر لتحديد سقف السرعة الإجمالية
+                        Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(cardColor).padding(14.dp)) {
+                            Text(text = "اسحب لتحديد سقف السرعة الإجمالية:", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Slider(
                                 value = speedLimit,
                                 onValueChange = { newValue ->
@@ -226,46 +250,50 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                        Column(modifier = Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp)).background(cardColor).padding(16.dp)) {
-                            OutlinedTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                placeholder = { Text("ابحث عن تطبيق...", color = Color.Gray) },
-                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray) },
-                                singleLine = true
-                            )
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Text(text = "التطبيقات المتاحة للتحكم:", color = Color.LightGray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 4.dp))
+                        // قائمة اختيار التطبيقات ديناميكياً
+                        Column(modifier = Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp)).background(cardColor).padding(14.dp)) {
+                            Text(text = "التطبيقات المتاحة للتحكم العادل:", color = Color.LightGray, fontSize = 13.sp, modifier = Modifier.padding(vertical = 2.dp))
 
                             LazyColumn(modifier = Modifier.fillMaxWidth()) {
                                 val filteredApps = installedApps.filter { it.appName.contains(searchQuery, ignoreCase = true) }
                                 items(filteredApps) { app ->
+                                    // 🚀 [حل مشكلة اضطراب وتأخر السويتش وجعل الاستجابة فورية وحقيقية 100%]
+                                    val isAppTargeted = selectedPackages.value.contains(app.packageName)
+
                                     Row(
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Switch(
-                                            checked = app.isChecked,
+                                            checked = isAppTargeted,
                                             onCheckedChange = { isChecked ->
-                                                app.isChecked = isChecked
-                                                val currentSet = selectedPackages.value.toMutableSet()
-                                                if (isChecked) currentSet.add(app.packageName) else currentSet.remove(app.packageName)
+                                                val updatedSet = selectedPackages.value.toMutableSet()
+                                                if (isChecked) {
+                                                    updatedSet.add(app.packageName)
+                                                } else {
+                                                    updatedSet.remove(app.packageName)
+                                                }
                                                 
-                                                selectedPackages.value = currentSet
-                                                AppConfig.saveTargetApps(context, currentSet)
+                                                // التحديث الفوري للحالة في الواجهة (يتحول للأخضر فوراً)
+                                                selectedPackages.value = updatedSet
+                                                // الحفظ المتزامن في الإعدادات
+                                                AppConfig.saveTargetApps(context, updatedSet)
                                                 
+                                                // [حل الانقطاع المفاجئ]: نقوم بتحديث نفق الـ VPN بنعومة وسلاسة إذا كانت الخدمة تعمل
                                                 if (isVpnEnabled) {
                                                     val intent = Intent(context, LocalVpnService::class.java).apply { action = "START" }
                                                     context.startService(intent)
                                                 }
                                             },
-                                            colors = SwitchDefaults.colors(checkedThumbColor = successGreen, checkedTrackColor = successGreen.copy(alpha = 0.5f))
+                                            colors = SwitchDefaults.colors(
+                                                checkedThumbColor = Color.White, 
+                                                checkedTrackColor = successGreen,
+                                                uncheckedThumbColor = Color.Gray,
+                                                uncheckedTrackColor = Color.Gray.copy(alpha = 0.3f)
+                                            )
                                         )
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(end = 12.dp)) {
@@ -275,18 +303,18 @@ class MainActivity : ComponentActivity() {
                                             Image(
                                                 bitmap = drawableToBitmap(app.icon).asImageBitmap(),
                                                 contentDescription = null,
-                                                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp))
+                                                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
                                             )
                                         }
                                     }
-                                    // ✅ تم التعديل هنا أيضاً إلى Divider ليتوافق مع إصدار مشروعك
                                     Divider(color = Color.Gray.copy(alpha = 0.1f))
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
+                        // زر تشغيل وإيقاف الـ VPN المركزي
                         Button(
                             onClick = {
                                 if (isVpnEnabled) {
@@ -307,7 +335,7 @@ class MainActivity : ComponentActivity() {
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = if (isVpnEnabled) Color(0xFFEF4444) else primaryPurple),
                             shape = RoundedCornerShape(18.dp),
-                            modifier = Modifier.fillMaxWidth().height(55.dp)
+                            modifier = Modifier.fillMaxWidth().height(50.dp)
                         ) {
                             Text(text = if (isVpnEnabled) "إيقاف محدد السرعة" else "تشغيل وتحديد السرعة الآن", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
