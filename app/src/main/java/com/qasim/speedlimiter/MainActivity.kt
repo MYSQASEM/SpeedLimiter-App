@@ -37,7 +37,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// كلاس داخلي لتسهيل التعامل مع التطبيقات المثبتة في الواجهة
 data class AppUiInfo(
     val appName: String,
     val packageName: String,
@@ -49,6 +48,7 @@ class MainActivity : ComponentActivity() {
 
     private val VPN_REQUEST_CODE = 24
 
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -59,7 +59,6 @@ class MainActivity : ComponentActivity() {
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
             val context = LocalContext.current
 
-            // الألوان المستوحاة من التصاميم المرفقة
             val backgroundColor = Color(0xFF111625)
             val cardColor = Color(0xFF1E293B)
             val primaryPurple = Color(0xFF6366F1)
@@ -70,12 +69,10 @@ class MainActivity : ComponentActivity() {
             var isVpnEnabled by remember { mutableStateOf(sharedPrefs.getBoolean(AppConfig.KEY_IS_ENABLED, false)) }
             var speedLimit by remember { mutableStateOf(sharedPrefs.getInt(AppConfig.KEY_SPEED_LIMIT, 1024).toFloat()) }
             
-            // حالة قائمة التطبيقات
             var installedApps by remember { mutableStateOf<List<AppUiInfo>>(emptyList()) }
             var searchQuery by remember { mutableStateOf("") }
             val selectedPackages = remember { mutableStateOf(AppConfig.getTargetApps(context)) }
 
-            // جلب التطبيقات المثبتة في الخلفية بأمان
             LaunchedEffect(Unit) {
                 withContext(Dispatchers.IO) {
                     val pm = context.packageManager
@@ -96,7 +93,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // الهيكل الخارجي للقائمة الجانبية (Navigation Drawer)
             ModalNavigationDrawer(
                 drawerState = drawerState,
                 drawerContent = {
@@ -104,7 +100,6 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.width(300.dp).fillMaxHeight(),
                         drawerContainerColor = Color.White
                     ) {
-                        // الهيدر العلوي للقائمة الجانبية
                         Box(
                             modifier = Modifier.fillMaxWidth().height(180.dp).background(accentBlue),
                             contentAlignment = Alignment.Center
@@ -124,9 +119,8 @@ class MainActivity : ComponentActivity() {
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // عناصر القائمة الجانبية
                         val menuItems = listOf(
-                            "✨ احصل على النسخة" to Color(0xFFF77F00),
+                            "✨ احصل على النسخة المدفوعة" to Color(0xFFF77F00),
                             "📊 الإحصائيات المتقدمة" to Color.Black,
                             "📈 الرسم البياني" to Color.Black,
                             "🌐 لغة التطبيق" to Color.Black,
@@ -155,14 +149,14 @@ class MainActivity : ComponentActivity() {
             ) {
                 Scaffold(
                     topBar = {
-                        SmallTopAppBar(
+                        TopAppBar(
                             title = { Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) { Text("محدد السرعة", color = Color.White, fontWeight = FontWeight.Bold) } },
                             navigationIcon = {
                                 IconButton(onClick = { scope.launch { drawerState.open() } }) {
                                     Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
                                 }
                             },
-                            colors = TopAppBarDefaults.smallTopAppBarColors(containerColor = backgroundColor)
+                            colors = TopAppBarDefaults.topAppBarColors(containerColor = backgroundColor)
                         )
                     },
                     containerColor = backgroundColor
@@ -171,7 +165,6 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 24.dp, vertical = 8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // 1. العداد المركزي وحالة الخدمة
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(cardColor).padding(16.dp)
@@ -206,7 +199,6 @@ class MainActivity : ComponentActivity() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // 2. السلايدر
                         Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(cardColor).padding(16.dp)) {
                             Text(text = "اسحب لتحديد سقف السرعة الإجمالية:", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                             Slider(
@@ -226,7 +218,6 @@ class MainActivity : ComponentActivity() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // 3. شريط البحث وقائمة اختيار التطبيقات ديناميكياً (مثل التصميم المرفق)
                         Column(modifier = Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp)).background(cardColor).padding(16.dp)) {
                             OutlinedTextField(
                                 value = searchQuery,
@@ -235,7 +226,12 @@ class MainActivity : ComponentActivity() {
                                 placeholder = { Text("ابحث عن تطبيق...", color = Color.Gray) },
                                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray) },
                                 singleLine = true,
-                                colors = TextFieldDefaults.outlinedTextFieldColors(focusedBorderColor = primaryPurple, unfocusedBorderColor = Color.Gray, textColor = Color.White)
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = primaryPurple,
+                                    unfocusedBorderColor = Color.Gray,
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White
+                                )
                             )
 
                             Spacer(modifier = Modifier.height(8.dp))
@@ -260,7 +256,6 @@ class MainActivity : ComponentActivity() {
                                                 selectedPackages.value = currentSet
                                                 AppConfig.saveTargetApps(context, currentSet)
                                                 
-                                                // إعادة تشغيل الخدمة فورياً لتحديث جدار الحماية بالتطبيقات الجديدة
                                                 if (isVpnEnabled) {
                                                     val intent = Intent(context, LocalVpnService::class.java).apply { action = "START" }
                                                     context.startService(intent)
@@ -287,7 +282,6 @@ class MainActivity : ComponentActivity() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // 4. زر تشغيل وإيقاف الـ VPN
                         Button(
                             onClick = {
                                 if (isVpnEnabled) {
@@ -298,8 +292,10 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     val vpnIntent = VpnService.prepare(this@MainActivity)
                                     if (vpnIntent != null) {
+                                        @Suppress("DEPRECATION")
                                         startActivityForResult(vpnIntent, VPN_REQUEST_CODE)
                                     } else {
+                                        @Suppress("DEPRECATION")
                                         onActivityResult(VPN_REQUEST_CODE, ComponentActivity.RESULT_OK, null)
                                     }
                                 }
@@ -316,7 +312,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == VPN_REQUEST_CODE && resultCode == ComponentActivity.RESULT_OK) {
             val sharedPrefs = getSharedPreferences(AppConfig.PREFS_NAME, Context.MODE_PRIVATE)
