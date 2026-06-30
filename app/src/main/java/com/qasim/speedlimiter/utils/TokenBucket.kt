@@ -1,111 +1,42 @@
 package com.qasim.speedlimiter.utils
 
-import android.util.Log
-import kotlin.math.min
-
-class TokenBucket(initialCapacity: Long, initialRatePerSecond: Long) {
-    
-    @Volatile
-    private var capacity: Double = initialCapacity.toDouble()
-    
-    @Volatile
-    private var refillRatePerSecond: Double = initialRatePerSecond.toDouble()
-    
-    private var tokens: Double = initialCapacity.toDouble()
+class TokenBucket(private val maxCapacity: Long, private val refillRatePerMs: Long) {
+    // نستخدم تزامناً مرناً أو المتغيرات المتقلبة لحماية الخيوط المتعددة في الـ VPN
+    private var tokens: Long = maxCapacity
     private var lastRefillTimestamp: Long = System.currentTimeMillis()
-    
-    @Volatile
-    private var isPaused: Boolean = false
 
     /**
-     * الدالة الجوهرية لخنق الحزم بناءً على الرصيد المتاح بالملي ثانية
+     * دالة الاستهلاك المعدلة:
+     * لا تعيد true أو false، بل تحجز الحزمة وتنام (Sleep) حتى تتوفر مساحة لمرورها.
      */
     @Synchronized
-    fun consume(bytesCount: Long) {
-        // إذا كانت السرعة المحددة صفر أو أقل، نعتبره إيقاف كامل للإنترنت أو عدم تحديد (حسب منطق تطبيقك)
-        // هنا سنعتبر أن 0 تعني سرعة غير محدودة لتفنيد المشاكل، أو يمكنك تعديلها
-        if (refillRatePerSecond <= 0) return 
+    fun consume(amount: Long) {
+        refill()
 
-        while (true) {
-            if (isPaused) {
-                try {
-                    (this as Object).wait(1000L)
-                } catch (e: Exception) {
-                    // تم إيقاظ الخيط
-                }
-                continue
+        // إذا كانت النقاط الحالية لا تكفي لحجم الحزمة، ندخل في حلقة انتظار
+        while (tokens < amount) {
+            try {
+                // الانتظار لفترة قصيرة جداً (من 2 إلى 5 ملي ثانية) لمنع استهلاك المعالج CPU 100%
+                Thread.sleep(3) 
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
             }
-
-            refillTokens()
-            
-            if (tokens >= bytesCount) {
-                tokens -= bytesCount
-                break
-            } else {
-                // حساب مدة الانتظار المطلوبة بدقة كسرية بالملي ثانية لمنع الـ Packet Loss
-                val bytesNeeded = bytesCount - tokens
-                val millisecondsToWait = ((bytesNeeded / refillRatePerSecond) * 1000.0).toLong()
-                
-                // تأمين وقت انتظار لا يقل عن 1 ملي ثانية لعدم استهلاك المعالج بالـ Loop الطاحنة
-                val waitTime = millisecondsToWait.coerceIn(1L, 500L)
-                
-                try {
-                    (this as Object).wait(waitTime)
-                } catch (e: Exception) {
-                    // تم تحديث السرعة أو الاستيقاظ عبر notifyAll
-                }
-            }
+            // إعادة ملء السلة بعد الاستيقاظ لمعرفة هل توفرت نقاط جديدة؟
+            refill()
         }
+
+        // خصم النقاط بعد توفرها ومرور الحزمة بنجاح
+        tokens -= amount
     }
 
-    /**
-     * إعادة تعبئة الخزان بالتوكنز بدقة Double لتفادي ضياع الحزم السريعة
-     */
-    private fun refillTokens() {
-        val currentTime = System.currentTimeMillis()
-        val elapsedTimeMs = currentTime - lastRefillTimestamp
-        
-        if (elapsedTimeMs > 0) {
-            // الحساب بالـ Double يضمن أنه حتى لو مر 1 ملي ثانية، ستضاف كسور التوكنز بدقة
-            val tokensToAdd = (elapsedTimeMs / 1000.0) * refillRatePerSecond
-            if (tokensToAdd > 0) {
-                tokens = min(capacity, tokens + tokensToAdd)
-                lastRefillTimestamp = currentTime
-            }
+    private fun refill() {
+        val now = System.currentTimeMillis()
+        val elapsedTime = now - lastRefillTimestamp
+        if (elapsedTime > 0) {
+            val tokensToAdd = elapsedTime * refillRatePerMs
+            tokens = minOf(maxCapacity, tokens + tokensToAdd)
+            lastRefillTimestamp = now
         }
-    }
-
-    /**
-     * تحديث فوري وديناميكي عند سحب السلايدر وإيقاظ الخيوط المنتظرة فوراً
-     */
-    @Synchronized
-    fun updateRate(newCapacity: Long, newRate: Long) {
-        this.capacity = newCapacity.toDouble()
-        this.refillRatePerSecond = newRate.toDouble()
-        
-        if (this.tokens > this.capacity) {
-            this.tokens = this.capacity
-        }
-        
-        // إعادة تعيين وقت التعبئة تجنباً لقفزات الوقت الفجائية
-        this.lastRefillTimestamp = System.currentTimeMillis()
-        
-        Log.d("TokenBucket", "تم تحديث محرك التخنيق فوريًا: $newRate Bytes/Sec")
-        
-        // إيقاظ فوري لكافة الخيوط لتطبيق السرعة الجديدة بدون أي تهنيج
-        (this as Object).notifyAll()
-    }
-
-    @Synchronized
-    fun pause() {
-        isPaused = true
-        (this as Object).notifyAll()
-    }
-
-    @Synchronized
-    fun resume() {
-        isPaused = false
-        lastRefillTimestamp = System.currentTimeMillis()
-        (this as Object).notifyAll()
     }
 }
