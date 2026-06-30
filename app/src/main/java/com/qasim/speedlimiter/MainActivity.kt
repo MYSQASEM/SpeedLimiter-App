@@ -140,7 +140,8 @@ class MainActivity : ComponentActivity() {
                         )
 
                         menuItems.forEach { (title, color) ->
-                            HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                            // ✅ تم التعديل هنا إلى Divider ليتوافق مع إصدار مشروعك
+                            Divider(color = Color.LightGray.copy(alpha = 0.3f))
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -163,7 +164,6 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // البار العلوي اليدوي لتجنب مشاكل وعيوب تفاصيل الماتيريال 3 في الكومبايلر
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -175,7 +175,6 @@ class MainActivity : ComponentActivity() {
                             Text("محدد السرعة", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                         }
 
-                        // 1. العداد المركزي وحالة الخدمة
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(cardColor).padding(16.dp)
@@ -210,7 +209,6 @@ class MainActivity : ComponentActivity() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // 2. السلايدر
                         Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(cardColor).padding(16.dp)) {
                             Text(text = "اسحب لتحديد سقف السرعة الإجمالية:", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                             Slider(
@@ -230,7 +228,6 @@ class MainActivity : ComponentActivity() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // 3. شريط البحث وقائمة اختيار التطبيقات ديناميكياً
                         Column(modifier = Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp)).background(cardColor).padding(16.dp)) {
                             OutlinedTextField(
                                 value = searchQuery,
@@ -282,14 +279,14 @@ class MainActivity : ComponentActivity() {
                                             )
                                         }
                                     }
-                                    HorizontalDivider(color = Color.Gray.copy(alpha = 0.1f))
+                                    // ✅ تم التعديل هنا أيضاً إلى Divider ليتوافق مع إصدار مشروعك
+                                    Divider(color = Color.Gray.copy(alpha = 0.1f))
                                 }
                             }
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // 4. زر تشغيل وإيقاف الـ VPN
                         Button(
                             onClick = {
                                 if (isVpnEnabled) {
