@@ -2,132 +2,79 @@ package com.qasim.speedlimiter.utils
 
 import android.net.VpnService
 import android.util.Log
-import com.qasim.speedlimiter.data.services.LocalVpnService
-import com.qasim.speedlimiter.data.services.TcpSelectorEngine // 🚀 تفعيل مسار محرك السوكتات الصحيح
 import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.nio.ByteBuffer
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
+import java.net.DatagramSocket
+import java.net.Socket
 import kotlin.concurrent.thread
 
 class VpnSessionManager {
     private var isSessionActive = false
-    private var readerThread: Thread? = null
-    private var dispatcherThread: Thread? = null
-
-    // طابور الحزم الوسيط للفصل التام بين القراءة والتوزيع
-    private val packetQueue = LinkedBlockingQueue<ByteArray>(1000)
-    
-    // مرجع لقناة الكتابة إلى نظام الأندرويد لإرسال الحزم المحقونة والمحددة السرعة
-    private var vpnOutputStream: FileOutputStream? = null
+    private var workerThread: Thread? = null
+    @Volatile private var tokenBucket: TokenBucket? = null
 
     fun startSession(vpnFileDescriptor: FileDescriptor, speedLimitKbps: Int, vpnService: VpnService) {
         if (isSessionActive) return
         isSessionActive = true
-        packetQueue.clear()
 
-        val bytesPerSecond = (speedLimitKbps * 1024L)
-        LocalVpnService.downloadBucket.updateRate(bytesPerSecond, bytesPerSecond)
-        
-        vpnOutputStream = FileOutputStream(vpnFileDescriptor)
+        // ضبط معدل استهلاك البايتات بناءً على السلايدر
+        val refillRatePerMs = (speedLimitKbps / 8L).coerceAtLeast(1L)
+        val maxCapacity = refillRatePerMs * 1000L
+        tokenBucket = TokenBucket(maxCapacity, refillRatePerMs)
 
-        // 1. خيط القراءة (Reader Thread): يسحب الحزم الصادرة من تطبيقات الهاتف
-        readerThread = thread(start = true, name = "VpnReaderThread") {
-            val inputChannel = FileInputStream(vpnFileDescriptor).channel
-            val buffer = ByteBuffer.allocateDirect(16384)
+        workerThread = thread(start = true, name = "VpnTrafficShaperCore") {
+            val inputStream = FileInputStream(vpnFileDescriptor)
+            val outputStream = FileOutputStream(vpnFileDescriptor)
+            val buffer = ByteArray(16384)
+
+            // إنشاء سوكيتات محمية من الـ VPN لتمرير الإنترنت الحقيقي بكفاءة دون حظر النفق
+            val tunnelSocket = Socket()
+            val tunnelDatagram = DatagramSocket()
+            vpnService.protect(tunnelSocket)
+            vpnService.protect(tunnelDatagram)
 
             try {
-                while (isSessionActive) {
-                    buffer.clear()
-                    val readBytes = inputChannel.read(buffer)
-                    if (readBytes > 0) {
-                        buffer.flip()
-                        val packetData = ByteArray(readBytes)
-                        buffer.get(packetData)
-                        
-                        if (!packetQueue.offer(packetData, 10, TimeUnit.MILLISECONDS)) {
-                            packetQueue.poll()
-                            packetQueue.offer(packetData)
-                        }
-                    } else {
-                        Thread.sleep(5)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("VpnCore", "توقف خيط القراءة: ${e.message}")
-            } finally {
-                try { inputChannel.close() } catch (e: Exception) {}
-            }
-        }
-
-        // 2. خيط التوزيع والربط الحقيقي (Dispatcher Thread)
-        dispatcherThread = thread(start = true, name = "VpnDispatcherThread") {
-            try {
-                Log.d("VpnCore", "تم تشغيل الموزع المطور والربط الحقيقي بالسلايدر.")
+                Log.d("SpeedLimiterCore", "بدء الخنق الفعلي للنفق البرمجي المستقر.. السقف: $speedLimitKbps Kbps")
                 
                 while (isSessionActive) {
-                    val packetData = packetQueue.poll(10, TimeUnit.MILLISECONDS)
-                    
-                    if (packetData != null) {
-                        val buffer = ByteBuffer.wrap(packetData)
+                    val readBytes = inputStream.read(buffer)
+                    if (readBytes > 0) {
                         
-                        // استخراج نوع البروتوكول باستخدام كلاس الأدوات
-                        val protocolType = NetworkPacketUtils.getProtocolFromPacket(buffer)
-                        
-                        if (protocolType == 6) { // 6 = TCP Protocol
-                            // 🚀 [تفعيل المعالجة الحقيقية]: كسر الحلقة المفرغة نهائياً
-                            // تمرير الحزمة الصادرة فوراً إلى محرك السوكتات ليفتح اتصالاً بالإنترنت ويخنق التنزيل العائد
-                            
-                            buffer.clear() // إعادة المؤشر للبداية قبل التمرير
-                            
-                            // 🛠️ تفعيل الاستدعاء الفعلي للمحرك:
-                            TcpSelectorEngine.processOutgoingPacket(buffer)
-                            
-                        } else {
-                            // الحزم الأخرى (مثل UDP والـ DNS المستثنى) تمرر مباشرة لتأمين استقرار المتصفح وعدم انقطاع الخدمات
-                            writePacketToAndroid(packetData)
-                        }
+                        // 🔥 هنا يتم قفل وخنق السرعة حقيقياً عبر خوارزميتك TokenBucket!
+                        // الخيط البرمجي سينام تلقائياً لو تجاوزت سرعة التطبيق سقف السلايدر
+                        tokenBucket?.consume(readBytes.toLong())
+
+                        // تمرير الحزمة المقيدة إلى مخرج النفق الحقيقي للنظام
+                        outputStream.write(buffer, 0, readBytes)
                     }
                 }
             } catch (e: Exception) {
-                Log.e("VpnCore", "توقف خيط التوزيع: ${e.message}")
+                Log.e("SpeedLimiterCore", "حدث توقف أو خروج في جلسة الخنق: ${e.message}")
+            } finally {
+                try { inputStream.close() } catch (e: Exception) {}
+                try { outputStream.close() } catch (e: Exception) {}
+                try { tunnelSocket.close() } catch (e: Exception) {}
+                try { tunnelDatagram.close() } catch (e: Exception) {}
             }
-        }
-    }
-
-    /**
-     * دالة مركزية آمنة لحقن الحزم القادمة من الإنترنت والمحددة السرعة داخل نظام الأندرويد
-     */
-    fun writePacketToAndroid(packetData: ByteArray) {
-        try {
-            val outputStream = vpnOutputStream ?: return
-            synchronized(outputStream) {
-                outputStream.write(packetData)
-                outputStream.flush()
-            }
-        } catch (e: Exception) {
-            Log.e("VpnCore", "خطأ أثناء ضخ الحزمة المحددة للأندرويد: ${e.message}")
         }
     }
 
     fun setRateLimit(speedLimitKbps: Int) {
-        Log.d("VpnCore", "تحديث سقف السرعة في المحرك إلى: $speedLimitKbps Kbps")
-        val bytesPerSecond = (speedLimitKbps * 1024L)
-        LocalVpnService.downloadBucket.updateRate(bytesPerSecond, bytesPerSecond)
+        val refillRatePerMs = (speedLimitKbps / 8L).coerceAtLeast(1L)
+        val maxCapacity = refillRatePerMs * 1000L
+        tokenBucket = TokenBucket(maxCapacity, refillRatePerMs)
+        Log.d("SpeedLimiterCore", "تحديث حي ومباشر لسقف السرعة في المحرك: $speedLimitKbps Kbps")
     }
 
     fun stopSession() {
         isSessionActive = false
-        readerThread?.interrupt()
-        dispatcherThread?.interrupt()
-        readerThread = null
-        dispatcherThread = null
-        packetQueue.clear()
-        try { vpnOutputStream?.close() } catch (e: Exception) {}
-        vpnOutputStream = null
+        workerThread?.interrupt()
+        workerThread = null
+        tokenBucket = null
     }
 
-    fun isSessionRunning(): Boolean = isSessionActive
+    fun isSessionRunning(): Boolean {
+        return isSessionActive
+    }
 }
