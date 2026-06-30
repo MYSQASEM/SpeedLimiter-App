@@ -18,12 +18,21 @@ class LocalVpnService : VpnService(), Runnable {
     private val sessionManager = VpnSessionManager()
 
     companion object {
+        // 🚀 [الإصلاح الذكي]: إضافة الـ instance لتمكين المحركات الأخرى من الوصول للخدمة وحماية السوكتات
+        @Volatile var instance: LocalVpnService? = null
+
         // محرك السرعة الذكي والمتاح على مستوى الخدمة لربطه مع الـ Session Manager وباقي المحركات
-        // القيمة الافتراضية الابتدائية (تُحسب بالبايت: كيلوبايت * 1024)
         val downloadBucket = TokenBucket(1024 * 1024L, 1024 * 1024L)
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        instance = this // تعيين الـ instance عند إنشاء الخدمة
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        instance = this // لضمان بقاء المرجع نشطاً دائماً عند تحديث السلايدر
+        
         val action = intent?.action
         
         // التقاط التحديثات القادمة من الـ Slider حيةً سواء كانت الخدمة تبدأ أو تعمل بالفعل
@@ -115,6 +124,7 @@ class LocalVpnService : VpnService(), Runnable {
         vpnThread = null
         try { vpnInterface?.close() } catch (e: Exception) {}
         vpnInterface = null
+        instance = null // تنظيف المرجع عند إيقاف الخدمة
         stopSelf()
     }
 
